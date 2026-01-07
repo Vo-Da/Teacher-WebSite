@@ -1202,8 +1202,8 @@
         // ===== Supabase (Auth + profiles) =====
         // 1) У Supabase: Settings → API → встав сюди Project URL та anon public key
         // 2) Важливо: service_role key НІКОЛИ не вставляй у фронтенд.
-        const SUPABASE_URL = 'PASTE_YOUR_SUPABASE_URL_HERE';
-        const SUPABASE_ANON_KEY = 'PASTE_YOUR_SUPABASE_ANON_KEY_HERE';
+        const SUPABASE_URL = 'https://dmphjqstprqgvoanargh.supabase.co';
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRtcGhqcXN0cHJxZ3ZvYW5hcmdoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3ODMxNTYsImV4cCI6MjA4MzM1OTE1Nn0.UVVpm4LezWQNT28wXX2pzxWVQSPCVm8OX2NslqM6Nns';
         const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
         const appData = {
