@@ -1196,7 +1196,16 @@
         </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
     <script>
+        // ===== Supabase (Auth + profiles) =====
+        // 1) У Supabase: Settings → API → встав сюди Project URL та anon public key
+        // 2) Важливо: service_role key НІКОЛИ не вставляй у фронтенд.
+        const SUPABASE_URL = 'PASTE_YOUR_SUPABASE_URL_HERE';
+        const SUPABASE_ANON_KEY = 'PASTE_YOUR_SUPABASE_ANON_KEY_HERE';
+        const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
         const appData = {
             schedule: [
                 {
@@ -1347,13 +1356,114 @@
         let editingUserId = null;
         let resetEmailForPassword = null;
 
+        // ===== Helpers =====
+        function escapeHtml(str) {
+            return String(str)
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;')
+                .replaceAll("'", '&#039;');
+        }
+
+        // ===== Supabase profile sync =====
+        async function getMyProfile(authUserId) {
+            const { data, error } = await sb
+                .from('profiles')
+                .select('user_id, full_name, role, legacy_id, can_add_students')
+                .eq('user_id', authUserId)
+                .maybeSingle();
+            if (error) throw error;
+            return data;
+        }
+
+        async function upsertMyProfile(profile, authUserId) {
+            const payload = {
+                user_id: authUserId,
+                full_name: profile.full_name || null,
+                role: profile.role || 'student',
+                legacy_id: profile.legacy_id || null,
+                can_add_students: !!profile.can_add_students
+            };
+            const { error } = await sb
+                .from('profiles')
+                .upsert(payload, { onConflict: 'user_id' });
+            if (error) throw error;
+        }
+
+        async function setCurrentUserFromSession(session) {
+            const authUser = session?.user;
+            if (!authUser) return;
+
+            // 1) Тягнемо профіль. Якщо профілю нема — створюємо (як студент).
+            let profile = await getMyProfile(authUser.id);
+            if (!profile) {
+                await upsertMyProfile({
+                    full_name: authUser.user_metadata?.full_name || authUser.email,
+                    role: 'student',
+                    legacy_id: null,
+                    can_add_students: false
+                }, authUser.id);
+                profile = await getMyProfile(authUser.id);
+            }
+
+            // 2) Перехідний режим: підтримуємо demo-дані appData (legacy_id)
+            const legacyId = profile.legacy_id || authUser.id;
+
+            if (!appData.users[legacyId]) {
+                appData.users[legacyId] = {
+                    id: legacyId,
+                    name: profile.full_name || authUser.email,
+                    email: authUser.email,
+                    password: '',
+                    role: profile.role || 'student'
+                };
+            }
+
+            // синхронізуємо ключові поля
+            appData.users[legacyId].name = profile.full_name || appData.users[legacyId].name || authUser.email;
+            appData.users[legacyId].email = authUser.email;
+            appData.users[legacyId].role = profile.role || appData.users[legacyId].role || 'student';
+
+            if (appData.users[legacyId].role === 'teacher') {
+                if (!appData.users[legacyId].students) appData.users[legacyId].students = [];
+                appData.users[legacyId].canAddStudents = !!profile.can_add_students;
+            } else {
+                delete appData.users[legacyId].students;
+                delete appData.users[legacyId].canAddStudents;
+            }
+
+            currentUser = appData.users[legacyId];
+            currentUser.authUserId = authUser.id;
+        }
+
+        async function bootstrapAuth() {
+            if (!SUPABASE_URL.startsWith('http') || !SUPABASE_ANON_KEY.startsWith('ey')) {
+                return; // Supabase ще не налаштований
+            }
+
+            const { data } = await sb.auth.getSession();
+            if (data?.session) {
+                await setCurrentUserFromSession(data.session);
+                showDashboard();
+            }
+
+            sb.auth.onAuthStateChange(async (_event, session) => {
+                if (session?.user) {
+                    await setCurrentUserFromSession(session);
+                    showDashboard();
+                }
+            });
+        }
+
+
         function validateEmail(email) {
             const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
             return regex.test(email);
         }
 
-        function login() {
-            const email = document.getElementById('loginEmail').value;
+        async function login() {
+            const email = document.getElementById('loginEmail').value.trim();
             const password = document.getElementById('loginPassword').value;
             const errorDiv = document.getElementById('loginError');
             errorDiv.innerHTML = '';
@@ -1363,19 +1473,28 @@
                 return;
             }
 
-            const user = Object.values(appData.users).find(u => u.email === email && u.password === password);
+            if (!SUPABASE_URL.startsWith('http') || !SUPABASE_ANON_KEY.startsWith('ey')) {
+                errorDiv.innerHTML = '<div class="error-message">Supabase не налаштований: встав Project URL та anon key у коді.</div>';
+                return;
+            }
 
-            if (user) {
-                currentUser = user;
+            try {
+                const { data, error } = await sb.auth.signInWithPassword({ email, password });
+                if (error) {
+                    errorDiv.innerHTML = `<div class="error-message">${escapeHtml(error.message)}</div>`;
+                    return;
+                }
+
+                await setCurrentUserFromSession(data.session);
                 showDashboard();
-            } else {
-                errorDiv.innerHTML = '<div class="error-message">Неправильні дані для входу</div>';
+            } catch (err) {
+                errorDiv.innerHTML = `<div class="error-message">Помилка входу: ${escapeHtml(String(err))}</div>`;
             }
         }
 
-        function register() {
-            const name = document.getElementById('regName').value;
-            const email = document.getElementById('regEmail').value;
+        async function register() {
+            const name = document.getElementById('regName').value.trim();
+            const email = document.getElementById('regEmail').value.trim();
             const password = document.getElementById('regPassword').value;
             const passwordConfirm = document.getElementById('regPasswordConfirm').value;
             const errorDiv = document.getElementById('registerError');
@@ -1403,22 +1522,45 @@
                 return;
             }
 
-            if (Object.values(appData.users).some(u => u.email === email)) {
-                errorDiv.innerHTML = '<div class="error-message">Цей email вже зареєстрований</div>';
+            if (!SUPABASE_URL.startsWith('http') || !SUPABASE_ANON_KEY.startsWith('ey')) {
+                errorDiv.innerHTML = '<div class="error-message">Supabase не налаштований: встав Project URL та anon key у коді.</div>';
                 return;
             }
 
-            const newStudentId = 'student_' + Date.now();
-            appData.users[newStudentId] = {
-                id: newStudentId,
-                name: name,
-                email: email,
-                password: password,
-                role: 'student'
-            };
+            try {
+                const { data, error } = await sb.auth.signUp({
+                    email,
+                    password,
+                    options: {
+                        data: { full_name: name }
+                    }
+                });
 
-            successDiv.innerHTML = '<div class="success-message">Реєстрація успішна! Адміністратор може змінити вашу роль. Увійдіть в систему.</div>';
-            setTimeout(() => toggleAuth(), 2000);
+                if (error) {
+                    errorDiv.innerHTML = `<div class="error-message">${escapeHtml(error.message)}</div>`;
+                    return;
+                }
+
+                // Якщо в проєкті увімкнена email-confirmation, session може бути null.
+                if (!data.session) {
+                    successDiv.innerHTML = '<div class="success-message">Реєстрація створена! Перевірте пошту та підтвердіть email, потім увійдіть.</div>';
+                    setTimeout(() => toggleAuth(), 2000);
+                    return;
+                }
+
+                await upsertMyProfile({
+                    full_name: name,
+                    role: 'student',
+                    legacy_id: null,
+                    can_add_students: false
+                }, data.session.user.id);
+
+                await setCurrentUserFromSession(data.session);
+                showDashboard();
+
+            } catch (err) {
+                errorDiv.innerHTML = `<div class="error-message">Помилка реєстрації: ${escapeHtml(String(err))}</div>`;
+            }
         }
 
         function toggleAuth() {
@@ -1515,7 +1657,13 @@
             }
         }
 
-        function logout() {
+        async function logout() {
+            try {
+                await sb.auth.signOut();
+            } catch (e) {
+                // навіть якщо signOut не вдався, чистимо UI локально
+            }
+
             currentUser = null;
             document.getElementById('authScreen').style.display = 'flex';
             document.getElementById('adminDashboard').classList.remove('active');
@@ -2787,9 +2935,10 @@
             }
         }
 
-        // Init
+        // Init (demo lists) + auth bootstrap
         renderUsersList();
         renderAllAssignments();
+        bootstrapAuth();
 
         if (new URLSearchParams(location.search).get('test') === '1') {
             runSelfTests();
