@@ -847,8 +847,6 @@
                         <a onclick="openPasswordResetModal()" style="color: var(--color-primary);">Забули пароль?</a>
                     </div>
                 </div>
-<div>Teacher: teacher@example.com / demo123</div>
-                    <div>Student: maria@example.com / demo123</div>
                 </div>
             </div>
 
@@ -1052,24 +1050,36 @@
         <div class="modal-content">
             <span class="modal-close" onclick="closeModal('passwordResetModal')">&times;</span>
             <div class="modal-header">Скидання паролю</div>
-            <form onsubmit="resetPassword(event)">
+
+            <!-- Step 1: request reset email -->
+            <form id="resetRequestForm" onsubmit="sendPasswordResetEmail(event)">
                 <div id="resetError"></div>
                 <div id="resetSuccess"></div>
                 <div class="form-group">
                     <label for="resetEmail">Введіть ваш email:</label>
                     <input type="email" id="resetEmail" required>
                 </div>
-                <button type="submit" class="btn btn-primary">Отримати код скидання</button>
-                <div id="resetCodeDiv" style="display: none;">
-                    <div class="form-group" style="margin-top: 20px;">
-                        <label for="resetCode">Код скидання:</label>
-                        <input type="text" id="resetCode" placeholder="Перевірте вашу пошту" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="newPassword">Новий пароль:</label>
-                        <input type="password" id="newPassword" placeholder="Мінімум 6 символів" required>
-                    </div>
-                    <button type="button" class="btn btn-primary" onclick="confirmPasswordReset()">Скинути пароль</button>
+                <button type="submit" class="btn btn-primary">Надіслати лист для скидання</button>
+                <div class="muted" style="margin-top: 10px;">
+                    Ми надішлемо вам лист із посиланням для зміни паролю.
+                </div>
+            </form>
+
+            <!-- Step 2: set new password (opened automatically after clicking email link) -->
+            <form id="resetNewPasswordForm" style="display:none;" onsubmit="updatePasswordFromRecovery(event)">
+                <div id="resetNewPwdError"></div>
+                <div id="resetNewPwdSuccess"></div>
+                <div class="form-group">
+                    <label for="newPassword">Новий пароль:</label>
+                    <input type="password" id="newPassword" placeholder="Мінімум 6 символів" required>
+                </div>
+                <div class="form-group">
+                    <label for="newPassword2">Повторіть новий пароль:</label>
+                    <input type="password" id="newPassword2" placeholder="Повторіть пароль" required>
+                </div>
+                <button type="submit" class="btn btn-primary">Змінити пароль</button>
+                <div class="muted" style="margin-top: 10px;">
+                    Після зміни паролю ви зможете увійти з новими даними.
                 </div>
             </form>
         </div>
@@ -1342,15 +1352,12 @@
                         files: ['discriminant-cheatsheet.pdf', 'examples-3.pdf']
                     }
                 ]
-            },
-            passwordResets: {}
+            }
         };
 
         let currentUser = null;
         let editingScheduleId = null;
         let editingUserId = null;
-        let resetEmailForPassword = null;
-
         // ===== Helpers =====
         function escapeHtml(str) {
             return String(str)
@@ -1453,7 +1460,18 @@
                 showDashboard();
             }
 
-            sb.auth.onAuthStateChange(async (_event, session) => {
+            sb.auth.onAuthStateChange(async (event, session) => {
+                // Password recovery flow: відкриваємо форму зміни паролю
+                if (event === 'PASSWORD_RECOVERY') {
+                    // показуємо екран входу і модалку скидання паролю
+                    document.getElementById('authScreen').style.display = 'flex';
+                    document.getElementById('adminDashboard').classList.remove('active');
+                    document.getElementById('teacherDashboard').classList.remove('active');
+                    document.getElementById('studentDashboard').classList.remove('active');
+                    openPasswordResetModal(true);
+                    return;
+                }
+
                 if (session?.user) {
                     await setCurrentUserFromSession(session);
                     showDashboard();
@@ -1584,47 +1602,105 @@
             document.getElementById('registerSuccess').innerHTML = '';
         }
 
-        function openPasswordResetModal() {
-            document.getElementById('resetEmail').value = '';
-            document.getElementById('resetCode').value = '';
-            document.getElementById('newPassword').value = '';
-            document.getElementById('resetCodeDiv').style.display = 'none';
+        function openPasswordResetModal(isRecovery = false) {
+            // reset UI
             document.getElementById('resetError').innerHTML = '';
             document.getElementById('resetSuccess').innerHTML = '';
+            document.getElementById('resetNewPwdError').innerHTML = '';
+            document.getElementById('resetNewPwdSuccess').innerHTML = '';
+
+            // forms
+            const reqForm = document.getElementById('resetRequestForm');
+            const newPwdForm = document.getElementById('resetNewPasswordForm');
+
+            if (isRecovery) {
+                reqForm.style.display = 'none';
+                newPwdForm.style.display = 'block';
+                document.getElementById('newPassword').value = '';
+                document.getElementById('newPassword2').value = '';
+            } else {
+                reqForm.style.display = 'block';
+                newPwdForm.style.display = 'none';
+                document.getElementById('resetEmail').value = '';
+            }
+
             document.getElementById('passwordResetModal').classList.add('active');
         }
 
-        function resetPassword(e) {
+        async function sendPasswordResetEmail(e) {
             e.preventDefault();
-            const email = document.getElementById('resetEmail').value;
+            const email = document.getElementById('resetEmail').value.trim();
             const errorDiv = document.getElementById('resetError');
             const successDiv = document.getElementById('resetSuccess');
             errorDiv.innerHTML = '';
             successDiv.innerHTML = '';
 
-            const user = Object.values(appData.users).find(u => u.email === email);
-            if (!user) {
-                errorDiv.innerHTML = '<div class="error-message">Email не знайдено</div>';
+            if (!email) {
+                errorDiv.innerHTML = '<div class="error-message">Введіть email</div>';
                 return;
             }
 
-            const resetCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-            appData.passwordResets[email] = { code: resetCode, userId: user.id };
-            resetEmailForPassword = email;
+            if (!SUPABASE_URL.startsWith('http') || !SUPABASE_ANON_KEY.startsWith('ey')) {
+                errorDiv.innerHTML = '<div class="error-message">Supabase не налаштований: встав Project URL та anon key у коді.</div>';
+                return;
+            }
 
-            successDiv.innerHTML = `<div class="success-message">Код скидання надіслано на ${email}<br><strong>Код для тестування: ${resetCode}</strong></div>`;
-            document.getElementById('resetCodeDiv').style.display = 'block';
+            try {
+                const { error } = await sb.auth.resetPasswordForEmail(email, {
+                    redirectTo: getAppUrl()
+                });
+                if (error) {
+                    errorDiv.innerHTML = `<div class="error-message">${escapeHtml(error.message)}</div>`;
+                    return;
+                }
+                successDiv.innerHTML = '<div class="success-message">Лист для скидання паролю надіслано. Перевірте пошту.</div>';
+            } catch (err) {
+                errorDiv.innerHTML = `<div class="error-message">Помилка: ${escapeHtml(String(err))}</div>`;
+            }
         }
 
-        function confirmPasswordReset() {
-            const resetCode = document.getElementById('resetCode').value;
-            const newPassword = document.getElementById('newPassword').value;
-            const errorDiv = document.getElementById('resetError');
+        async function updatePasswordFromRecovery(e) {
+            e.preventDefault();
+            const pwd1 = document.getElementById('newPassword').value;
+            const pwd2 = document.getElementById('newPassword2').value;
+            const errorDiv = document.getElementById('resetNewPwdError');
+            const successDiv = document.getElementById('resetNewPwdSuccess');
+            errorDiv.innerHTML = '';
+            successDiv.innerHTML = '';
 
-            if (!resetEmailForPassword || !appData.passwordResets[resetEmailForPassword]) {
-                errorDiv.innerHTML = '<div class="error-message">Будь ласка, спочатку введіть email</div>';
+            if (pwd1.length < 6) {
+                errorDiv.innerHTML = '<div class="error-message">Пароль повинен мати мінімум 6 символів</div>';
                 return;
             }
+            if (pwd1 !== pwd2) {
+                errorDiv.innerHTML = '<div class="error-message">Паролі не співпадають</div>';
+                return;
+            }
+
+            try {
+                const { error } = await sb.auth.updateUser({ password: pwd1 });
+                if (error) {
+                    errorDiv.innerHTML = `<div class="error-message">${escapeHtml(error.message)}</div>`;
+                    return;
+                }
+
+                successDiv.innerHTML = '<div class="success-message">Пароль успішно змінено! Увійдіть з новим паролем.</div>';
+
+                // Для чистої логіки — виходимо і повертаємо на форму входу.
+                setTimeout(async () => {
+                    try { await sb.auth.signOut(); } catch (e2) {}
+                    closeModal('passwordResetModal');
+                    document.getElementById('authScreen').style.display = 'flex';
+                    document.getElementById('adminDashboard').classList.remove('active');
+                    document.getElementById('teacherDashboard').classList.remove('active');
+                    document.getElementById('studentDashboard').classList.remove('active');
+                }, 1200);
+
+            } catch (err) {
+                errorDiv.innerHTML = `<div class="error-message">Помилка: ${escapeHtml(String(err))}</div>`;
+            }
+        }
+
 
             if (appData.passwordResets[resetEmailForPassword].code !== resetCode) {
                 errorDiv.innerHTML = '<div class="error-message">Неправильний код скидання</div>';
