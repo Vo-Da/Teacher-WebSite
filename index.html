@@ -54,7 +54,7 @@
             border-radius: 12px;
             box-shadow: 0 10px 40px rgba(0,0,0,0.2);
             width: 100%;
-            max-width: 400px;
+            max-width: 420px;
         }
 
         .auth-form h1 {
@@ -65,7 +65,7 @@
 
         .auth-form p {
             color: var(--color-text-light);
-            margin-bottom: 30px;
+            margin-bottom: 18px;
         }
 
         .error-message {
@@ -677,7 +677,7 @@
                 align-items: flex-start;
             }
         }
-    
+
         /* === Theme upgrade (more color, modern learning vibe) === */
         body {
             background:
@@ -831,6 +831,9 @@
                 </div>
                 <h1>Вхід</h1>
                 <p>Доступ до Портала</p>
+                <div class="muted" style="margin-bottom: 10px;">
+                    Демо-логіни: admin@example.com / demo123 • teacher@example.com / demo123 • maria@example.com / demo123
+                </div>
                 <div id="loginError"></div>
                 <div class="form-group">
                     <label for="loginEmail">Email:</label>
@@ -840,13 +843,12 @@
                     <label for="loginPassword">Пароль:</label>
                     <input type="password" id="loginPassword" placeholder="••••••••" required>
                 </div>
-                <button class="btn btn-primary" onclick="login()">Увійти</button>
+                <button class="btn btn-primary" type="button" onclick="login()">Увійти</button>
                 <div class="toggle-link">
                     Немає акаунту? <a onclick="toggleAuth()">Зареєструватися</a>
                     <div style="margin-top: 10px; font-size: 12px;">
                         <a onclick="openPasswordResetModal()" style="color: var(--color-primary);">Забули пароль?</a>
                     </div>
-                </div>
                 </div>
             </div>
 
@@ -878,7 +880,7 @@
                     <label for="regPasswordConfirm">Підтвердження паролю:</label>
                     <input type="password" id="regPasswordConfirm" placeholder="Повторіть пароль" required>
                 </div>
-                <button class="btn btn-primary" onclick="register()">Зареєструватися</button>
+                <button class="btn btn-primary" type="button" onclick="register()">Зареєструватися</button>
                 <div class="toggle-link">
                     Вже є акаунт? <a onclick="toggleAuth()">Увійти</a>
                 </div>
@@ -943,7 +945,7 @@
             <div id="schedule" class="tab-content active">
                 <div class="card">
                     <h3>Керування розкладом занять</h3>
-                    <button class="btn btn-primary" style="margin-bottom: 20px;" onclick="openAddScheduleModal()">+ Додати заняття</button>
+                    <button class="btn btn-primary" style="margin-bottom: 20px;" type="button" onclick="openAddScheduleModal()">+ Додати заняття</button>
                     <div style="display: grid; grid-template-columns: 300px 1fr; gap: 20px;">
                         <div id="calendarContainer"></div>
                         <div id="scheduleList"></div>
@@ -1203,13 +1205,42 @@
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <!--
+      IMPORTANT: "Script error." in the browser often happens when an external script fails to load or throws
+      cross-origin errors without CORS. Adding crossorigin="anonymous" helps the browser show real stack traces.
+      We also guard all Supabase usage so the demo works even if the CDN is blocked.
+    -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" crossorigin="anonymous" referrerpolicy="no-referrer" onerror="window.__supabaseLoadError=true;"></script>
 
     <script>
         // ===== Supabase (Auth + profiles) =====
         const SUPABASE_URL = 'https://dmphjqstprqgvoanargh.supabase.co';
         const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRtcGhqcXN0cHJxZ3ZvYW5hcmdoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3ODMxNTYsImV4cCI6MjA4MzM1OTE1Nn0.UVVpm4LezWQNT28wXX2pzxWVQSPCVm8OX2NslqM6Nns';
-        const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+        // NOTE: We DO NOT create the client eagerly.
+        // If the CDN is blocked / offline / CORS issues -> window.supabase can be undefined and would crash.
+        let sb = null;
+        function isSupabaseConfigured() {
+            return typeof SUPABASE_URL === 'string'
+                && typeof SUPABASE_ANON_KEY === 'string'
+                && SUPABASE_URL.startsWith('http')
+                && SUPABASE_ANON_KEY.startsWith('ey');
+        }
+        function isSupabaseLoaded() {
+            return !!(window.supabase && typeof window.supabase.createClient === 'function');
+        }
+        function getSupabaseClient() {
+            if (sb) return sb;
+            if (!isSupabaseConfigured() || !isSupabaseLoaded()) return null;
+            try {
+                sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+                return sb;
+            } catch (e) {
+                console.warn('Supabase init failed:', e);
+                sb = null;
+                return null;
+            }
+        }
 
         const appData = {
             schedule: [
@@ -1358,14 +1389,16 @@
         let currentUser = null;
         let editingScheduleId = null;
         let editingUserId = null;
+
         // ===== Helpers =====
         function escapeHtml(str) {
+            // Avoid String.prototype.replaceAll for broader browser compatibility.
             return String(str)
-                .replaceAll('&', '&amp;')
-                .replaceAll('<', '&lt;')
-                .replaceAll('>', '&gt;')
-                .replaceAll('"', '&quot;')
-                .replaceAll("'", '&#039;');
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
         }
 
         // Важливо для email-confirmation / password reset редіректів.
@@ -1378,9 +1411,21 @@
             return url;
         }
 
+        function validateEmail(email) {
+            const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            return regex.test(email);
+        }
+
+        function findDemoUser(email, password) {
+            const users = Object.values(appData.users);
+            return users.find(u => u.email === email && u.password === password) || null;
+        }
+
         // ===== Supabase profile sync =====
         async function getMyProfile(authUserId) {
-            const { data, error } = await sb
+            const client = getSupabaseClient();
+            if (!client) return null;
+            const { data, error } = await client
                 .from('profiles')
                 .select('user_id, full_name, role, legacy_id, can_add_students')
                 .eq('user_id', authUserId)
@@ -1390,6 +1435,8 @@
         }
 
         async function upsertMyProfile(profile, authUserId) {
+            const client = getSupabaseClient();
+            if (!client) return;
             const payload = {
                 user_id: authUserId,
                 full_name: profile.full_name || null,
@@ -1397,7 +1444,7 @@
                 legacy_id: profile.legacy_id || null,
                 can_add_students: !!profile.can_add_students
             };
-            const { error } = await sb
+            const { error } = await client
                 .from('profiles')
                 .upsert(payload, { onConflict: 'user_id' });
             if (error) throw error;
@@ -1420,26 +1467,26 @@
             }
 
             // 2) Перехідний режим: підтримуємо demo-дані appData (legacy_id)
-            const legacyId = profile.legacy_id || authUser.id;
+            const legacyId = profile?.legacy_id || authUser.id;
 
             if (!appData.users[legacyId]) {
                 appData.users[legacyId] = {
                     id: legacyId,
-                    name: profile.full_name || authUser.email,
+                    name: profile?.full_name || authUser.email,
                     email: authUser.email,
                     password: '',
-                    role: profile.role || 'student'
+                    role: profile?.role || 'student'
                 };
             }
 
             // синхронізуємо ключові поля
-            appData.users[legacyId].name = profile.full_name || appData.users[legacyId].name || authUser.email;
+            appData.users[legacyId].name = profile?.full_name || appData.users[legacyId].name || authUser.email;
             appData.users[legacyId].email = authUser.email;
-            appData.users[legacyId].role = profile.role || appData.users[legacyId].role || 'student';
+            appData.users[legacyId].role = profile?.role || appData.users[legacyId].role || 'student';
 
             if (appData.users[legacyId].role === 'teacher') {
                 if (!appData.users[legacyId].students) appData.users[legacyId].students = [];
-                appData.users[legacyId].canAddStudents = !!profile.can_add_students;
+                appData.users[legacyId].canAddStudents = !!profile?.can_add_students;
             } else {
                 delete appData.users[legacyId].students;
                 delete appData.users[legacyId].canAddStudents;
@@ -1450,17 +1497,25 @@
         }
 
         async function bootstrapAuth() {
-            if (!SUPABASE_URL.startsWith('http') || !SUPABASE_ANON_KEY.startsWith('ey')) {
-                return; // Supabase ще не налаштований
+            const client = getSupabaseClient();
+            if (!client) {
+                // Demo mode: Supabase not configured / not loaded.
+                if (window.__supabaseLoadError) {
+                    const err = document.getElementById('loginError');
+                    if (err) {
+                        err.innerHTML = '<div class="error-message">Не вдалося завантажити бібліотеку Supabase (CDN заблоковано або немає інтернету). Працюємо у демо-режимі.</div>';
+                    }
+                }
+                return;
             }
 
-            const { data } = await sb.auth.getSession();
+            const { data } = await client.auth.getSession();
             if (data?.session) {
                 await setCurrentUserFromSession(data.session);
                 showDashboard();
             }
 
-            sb.auth.onAuthStateChange(async (event, session) => {
+            client.auth.onAuthStateChange(async (event, session) => {
                 // Password recovery flow: відкриваємо форму зміни паролю
                 if (event === 'PASSWORD_RECOVERY') {
                     // показуємо екран входу і модалку скидання паролю
@@ -1479,12 +1534,6 @@
             });
         }
 
-
-        function validateEmail(email) {
-            const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-            return regex.test(email);
-        }
-
         async function login() {
             const email = document.getElementById('loginEmail').value.trim();
             const password = document.getElementById('loginPassword').value;
@@ -1496,13 +1545,21 @@
                 return;
             }
 
-            if (!SUPABASE_URL.startsWith('http') || !SUPABASE_ANON_KEY.startsWith('ey')) {
-                errorDiv.innerHTML = '<div class="error-message">Supabase не налаштований: встав Project URL та anon key у коді.</div>';
+            // If Supabase isn't available, fall back to demo login so the app still works.
+            const client = getSupabaseClient();
+            if (!client) {
+                const demo = findDemoUser(email, password);
+                if (!demo) {
+                    errorDiv.innerHTML = '<div class="error-message">Невірний email або пароль (демо-режим).</div>';
+                    return;
+                }
+                currentUser = { ...demo };
+                showDashboard();
                 return;
             }
 
             try {
-                const { data, error } = await sb.auth.signInWithPassword({ email, password });
+                const { data, error } = await client.auth.signInWithPassword({ email, password });
                 if (error) {
                     errorDiv.innerHTML = `<div class="error-message">${escapeHtml(error.message)}</div>`;
                     return;
@@ -1545,13 +1602,24 @@
                 return;
             }
 
-            if (!SUPABASE_URL.startsWith('http') || !SUPABASE_ANON_KEY.startsWith('ey')) {
-                errorDiv.innerHTML = '<div class="error-message">Supabase не налаштований: встав Project URL та anon key у коді.</div>';
+            const client = getSupabaseClient();
+            if (!client) {
+                // Demo register: create a local student.
+                const exists = Object.values(appData.users).some(u => u.email === email);
+                if (exists) {
+                    errorDiv.innerHTML = '<div class="error-message">Користувач з таким email вже існує (демо-режим).</div>';
+                    return;
+                }
+                const id = 'student_' + Date.now();
+                appData.users[id] = { id, name, email, password, role: 'student' };
+                currentUser = { ...appData.users[id] };
+                successDiv.innerHTML = '<div class="success-message">Акаунт створено (демо-режим).</div>';
+                setTimeout(() => showDashboard(), 300);
                 return;
             }
 
             try {
-                const { data, error } = await sb.auth.signUp({
+                const { data, error } = await client.auth.signUp({
                     email,
                     password,
                     options: {
@@ -1640,13 +1708,14 @@
                 return;
             }
 
-            if (!SUPABASE_URL.startsWith('http') || !SUPABASE_ANON_KEY.startsWith('ey')) {
-                errorDiv.innerHTML = '<div class="error-message">Supabase не налаштований: встав Project URL та anon key у коді.</div>';
+            const client = getSupabaseClient();
+            if (!client) {
+                errorDiv.innerHTML = '<div class="error-message">Скидання паролю доступне лише з Supabase (демо-режим).</div>';
                 return;
             }
 
             try {
-                const { error } = await sb.auth.resetPasswordForEmail(email, {
+                const { error } = await client.auth.resetPasswordForEmail(email, {
                     redirectTo: getAppUrl()
                 });
                 if (error) {
@@ -1677,8 +1746,14 @@
                 return;
             }
 
+            const client = getSupabaseClient();
+            if (!client) {
+                errorDiv.innerHTML = '<div class="error-message">Зміна паролю доступна лише з Supabase (демо-режим).</div>';
+                return;
+            }
+
             try {
-                const { error } = await sb.auth.updateUser({ password: pwd1 });
+                const { error } = await client.auth.updateUser({ password: pwd1 });
                 if (error) {
                     errorDiv.innerHTML = `<div class="error-message">${escapeHtml(error.message)}</div>`;
                     return;
@@ -1688,7 +1763,7 @@
 
                 // Для чистої логіки — виходимо і повертаємо на форму входу.
                 setTimeout(async () => {
-                    try { await sb.auth.signOut(); } catch (e2) {}
+                    try { await client.auth.signOut(); } catch (e2) {}
                     closeModal('passwordResetModal');
                     document.getElementById('authScreen').style.display = 'flex';
                     document.getElementById('adminDashboard').classList.remove('active');
@@ -1699,25 +1774,6 @@
             } catch (err) {
                 errorDiv.innerHTML = `<div class="error-message">Помилка: ${escapeHtml(String(err))}</div>`;
             }
-        }
-
-
-            if (appData.passwordResets[resetEmailForPassword].code !== resetCode) {
-                errorDiv.innerHTML = '<div class="error-message">Неправильний код скидання</div>';
-                return;
-            }
-
-            if (newPassword.length < 6) {
-                errorDiv.innerHTML = '<div class="error-message">Пароль повинен мати мінімум 6 символів</div>';
-                return;
-            }
-
-            const userId = appData.passwordResets[resetEmailForPassword].userId;
-            appData.users[userId].password = newPassword;
-            delete appData.passwordResets[resetEmailForPassword];
-
-            document.getElementById('resetSuccess').innerHTML = '<div class="success-message">Пароль успішно змінено! Увійдіть в систему.</div>';
-            setTimeout(() => closeModal('passwordResetModal'), 2000);
         }
 
         function showDashboard() {
@@ -1741,10 +1797,9 @@
         }
 
         async function logout() {
-            try {
-                await sb.auth.signOut();
-            } catch (e) {
-                // навіть якщо signOut не вдався, чистимо UI локально
+            const client = getSupabaseClient();
+            if (client) {
+                try { await client.auth.signOut(); } catch (e) {}
             }
 
             currentUser = null;
@@ -1778,18 +1833,19 @@
 
         function renderUsersList() {
             const list = document.getElementById('usersList');
+            if (!list) return;
             list.innerHTML = Object.values(appData.users).map(user => `
                 <div class="user-card">
                     <div class="user-info-text">
-                        <strong>${user.name}</strong>
-                        <small>${user.email}</small>
+                        <strong>${escapeHtml(user.name)}</strong>
+                        <small>${escapeHtml(user.email)}</small>
                         <div style="margin-top: 4px;">
-                            <span class="role-badge ${user.role}">${user.role === 'admin' ? 'Адміністратор' : user.role === 'teacher' ? 'Викладач' : 'Учень'}</span>
+                            <span class="role-badge ${escapeHtml(user.role)}">${user.role === 'admin' ? 'Адміністратор' : user.role === 'teacher' ? 'Викладач' : 'Учень'}</span>
                         </div>
                     </div>
                     <div class="user-actions">
-                        <button class="btn-small btn-small-secondary" onclick="openEditUserModal('${user.id}')">✏️ Редагувати</button>
-                        ${user.role !== 'admin' ? `<button class="btn-small btn-small-secondary" onclick="deleteUser('${user.id}')">🗑️ Видалити</button>` : ''}
+                        <button class="btn-small btn-small-secondary" type="button" onclick="openEditUserModal('${user.id}')">✏️ Редагувати</button>
+                        ${user.role !== 'admin' ? `<button class="btn-small btn-small-secondary" type="button" onclick="deleteUser('${user.id}')">🗑️ Видалити</button>` : ''}
                     </div>
                 </div>
             `).join('');
@@ -1841,7 +1897,7 @@
             list.innerHTML = students.map(student => `
                 <div style="padding: 8px; display: flex; gap: 10px; align-items: center;">
                     <input type="checkbox" id="student_${student.id}" value="${student.id}" ${teacherStudents.includes(student.id) ? 'checked' : ''}>
-                    <label for="student_${student.id}">${student.name} (${student.email})</label>
+                    <label for="student_${student.id}">${escapeHtml(student.name)} (${escapeHtml(student.email)})</label>
                 </div>
             `).join('');
         }
@@ -1878,14 +1934,15 @@
 
         function renderAllAssignments() {
             const list = document.getElementById('allAssignmentsList');
+            if (!list) return;
             list.innerHTML = appData.assignments.map(assign => {
                 const teacher = appData.users[assign.teacherId];
                 return `
                     <div class="assignment">
-                        <h4>${assign.title}</h4>
-                        <p>${assign.description}</p>
-                        <small>Викладач: ${teacher ? teacher.name : 'N/A'}</small><br>
-                        <small>Дата виконання: ${assign.deadline}</small>
+                        <h4>${escapeHtml(assign.title)}</h4>
+                        <p>${escapeHtml(assign.description || '')}</p>
+                        <small>Викладач: ${teacher ? escapeHtml(teacher.name) : 'N/A'}</small><br>
+                        <small>Дата виконання: ${escapeHtml(assign.deadline || '')}</small>
                     </div>
                 `;
             }).join('') || '<p style="color: #999;">Завдань немає</p>';
@@ -1922,9 +1979,9 @@
                 <div class="calendar">
                     <div class="calendar-header">
                         <div class="calendar-controls">
-                            <button onclick="changeMonth(-1)">←</button>
+                            <button type="button" onclick="changeMonth(-1)">←</button>
                             <span id="monthYearDisplay">${monthNames[currentMonth]} ${currentYear}</span>
-                            <button onclick="changeMonth(1)">→</button>
+                            <button type="button" onclick="changeMonth(1)">→</button>
                         </div>
                     </div>
                     <div class="weekdays">
@@ -2024,24 +2081,24 @@
                     return `
                     <div class="schedule-item">
                         <div class="schedule-info">
-                            <strong>${sched.name}</strong>
-                            <small>${sched.time}</small>
-                            <small style="color: var(--color-primary); margin-top: 4px; display: block;">${studentNames || 'немає учнів'}</small>
+                            <strong>${escapeHtml(sched.name)}</strong>
+                            <small>${escapeHtml(sched.time)}</small>
+                            <small style="color: var(--color-primary); margin-top: 4px; display: block;">${escapeHtml(studentNames || 'немає учнів')}</small>
                             ${statusEmoji ? `<small style="font-size: 16px; margin-top: 4px;">${statusEmoji}</small>` : ''}
                         </div>
                         <div class="schedule-platform">
-                            <span class="badge badge-platform">${sched.platform}</span>
-                            ${sched.link ? `<a href="${sched.link}" target="_blank" style="color: var(--color-primary); text-decoration: underline;">Посилання</a>` : ''}
+                            <span class="badge badge-platform">${escapeHtml(sched.platform)}</span>
+                            ${sched.link ? `<a href="${escapeHtml(sched.link)}" target="_blank" rel="noopener" style="color: var(--color-primary); text-decoration: underline;">Посилання</a>` : ''}
                         </div>
                         <div style="display: flex; gap: 10px; flex-direction: column;">
                             <div style="display: flex; gap: 10px;">
-                                <button class="btn-small btn-small-secondary" onclick="editSchedule('${sched.id}')">✏️</button>
-                                <button class="btn-small btn-small-secondary" onclick="deleteSchedule('${sched.id}')">🗑️</button>
+                                <button class="btn-small btn-small-secondary" type="button" onclick="editSchedule('${sched.id}')">✏️</button>
+                                <button class="btn-small btn-small-secondary" type="button" onclick="deleteSchedule('${sched.id}')">🗑️</button>
                             </div>
                             <div style="display: flex; gap: 6px; font-size: 12px;">
-                                <button class="btn-small" style="background: var(--color-success); color: white; flex: 1;" onclick="setScheduleStatus('${sched.id}', 'completed')" title="Проведено">✅ Проведено</button>
-                                <button class="btn-small" style="background: var(--color-danger); color: white; flex: 1;" onclick="setScheduleStatus('${sched.id}', 'cancelled')" title="Скасовано">❌ Скасовано</button>
-                                <button class="btn-small" style="background: var(--color-warning); color: white; flex: 1;" onclick="setScheduleStatus('${sched.id}', 'postponed')" title="Перенесено">⏳ Перенесено</button>
+                                <button class="btn-small" type="button" style="background: var(--color-success); color: white; flex: 1;" onclick="setScheduleStatus('${sched.id}', 'completed')" title="Проведено">✅ Проведено</button>
+                                <button class="btn-small" type="button" style="background: var(--color-danger); color: white; flex: 1;" onclick="setScheduleStatus('${sched.id}', 'cancelled')" title="Скасовано">❌ Скасовано</button>
+                                <button class="btn-small" type="button" style="background: var(--color-warning); color: white; flex: 1;" onclick="setScheduleStatus('${sched.id}', 'postponed')" title="Перенесено">⏳ Перенесено</button>
                             </div>
                         </div>
                     </div>
@@ -2124,7 +2181,7 @@
             container.innerHTML = allStudents.map(student => `
                 <div style="padding: 8px; display: flex; gap: 10px; align-items: center;">
                     <input type="checkbox" id="schedStudent_${student.id}" value="${student.id}" class="schedStudentCheckbox" ${selectedStudentIds.includes(student.id) ? 'checked' : ''}>
-                    <label for="schedStudent_${student.id}" style="margin: 0; cursor: pointer;">${student.name}</label>
+                    <label for="schedStudent_${student.id}" style="margin: 0; cursor: pointer;">${escapeHtml(student.name)}</label>
                 </div>
             `).join('');
         }
@@ -2155,7 +2212,7 @@
             const canAdd = !!appData.users[currentUser.id].canAddStudents;
 
             actions.innerHTML = canAdd
-                ? `<button class="btn-small btn-small-primary" onclick="openAddStudentsToTeacherModal()">+ Додати учня</button>`
+                ? `<button class="btn-small btn-small-primary" type="button" onclick="openAddStudentsToTeacherModal()">+ Додати учня</button>`
                 : `<span class="pill">🔒 Додавання учнів вимкнено (потрібне право від адміна)</span>`;
 
             const studentIds = new Set([...(appData.users[currentUser.id].students || [])]);
@@ -2173,12 +2230,12 @@
                     <div class="student-item" style="border-left-color: var(--color-info);">
                         <div style="display:flex; justify-content: space-between; gap: 10px; align-items: flex-start;">
                             <div style="flex:1;">
-                                <strong>${student.name}</strong>
-                                <small>${student.email}</small>
-                                ${note ? `<div class="muted" style="margin-top: 6px;">🗒️ ${note}</div>` : ''}
+                                <strong>${escapeHtml(student.name)}</strong>
+                                <small>${escapeHtml(student.email)}</small>
+                                ${note ? `<div class="muted" style="margin-top: 6px;">🗒️ ${escapeHtml(note)}</div>` : ''}
                             </div>
                             <div style="display:flex; gap: 8px;">
-                                <button class="btn-small btn-small-primary" onclick="openStudentDetail('${student.id}')">Відкрити</button>
+                                <button class="btn-small btn-small-primary" type="button" onclick="openStudentDetail('${student.id}')">Відкрити</button>
                             </div>
                         </div>
                     </div>
@@ -2246,7 +2303,6 @@
             return hh + ':' + mm;
         }
 
-
         function getLessonsForStudent(teacherId, studentId) {
             return appData.schedule
                 .filter(s => s.teacherId === teacherId && (s.studentIds || []).includes(studentId))
@@ -2297,7 +2353,7 @@
             const all = getLessonsForStudent(currentUser.id, studentId);
             const nextLessonOptions = all.map(s => {
                 const label = `${formatDateUA(s.date)} ${s.time} — ${s.name}`;
-                return `<option value="${s.id}">${label}</option>`;
+                return `<option value="${s.id}">${escapeHtml(label)}</option>`;
             }).join('');
 
             container.innerHTML = `
@@ -2309,16 +2365,16 @@
                         return `
                             <div class="schedule-item" style="grid-template-columns: 1.2fr 1fr 1fr;">
                                 <div class="schedule-info">
-                                    <strong>${s.name}</strong>
-                                    <small>${formatDateUA(s.date)} • ${s.time} ${statusEmoji ? '• ' + statusEmoji : ''}</small>
+                                    <strong>${escapeHtml(s.name)}</strong>
+                                    <small>${formatDateUA(s.date)} • ${escapeHtml(s.time)} ${statusEmoji ? '• ' + statusEmoji : ''}</small>
                                 </div>
                                 <div class="schedule-platform">
-                                    <span class="badge badge-platform">${s.platform}</span>
-                                    ${s.link ? `<a href="${s.link}" target="_blank" style="color: var(--color-primary); text-decoration: underline;">Посилання</a>` : ''}
+                                    <span class="badge badge-platform">${escapeHtml(s.platform)}</span>
+                                    ${s.link ? `<a href="${escapeHtml(s.link)}" target="_blank" rel="noopener" style="color: var(--color-primary); text-decoration: underline;">Посилання</a>` : ''}
                                 </div>
                                 <div class="inline-actions">
-                                    <button class="btn-small btn-small-secondary" onclick="prefillMaterialForLesson('${s.id}')">➕ Матеріал</button>
-                                    <button class="btn-small btn-small-secondary" onclick="prefillHomeworkForLesson('${s.id}')">➕ Д/З</button>
+                                    <button class="btn-small btn-small-secondary" type="button" onclick="prefillMaterialForLesson('${s.id}')">➕ Матеріал</button>
+                                    <button class="btn-small btn-small-secondary" type="button" onclick="prefillHomeworkForLesson('${s.id}')">➕ Д/З</button>
                                 </div>
                             </div>
                         `;
@@ -2333,8 +2389,8 @@
                                     <select id="sdQuickLessonSelect">${nextLessonOptions || '<option value="">(немає)</option>'}</select>
                                 </div>
                                 <div class="inline-actions">
-                                    <button class="btn-small btn-small-primary" onclick="jumpToHomeworkTab()">📝 Додати Д/З</button>
-                                    <button class="btn-small btn-small-primary" onclick="jumpToMaterialsTab()">📚 Додати матеріал</button>
+                                    <button class="btn-small btn-small-primary" type="button" onclick="jumpToHomeworkTab()">📝 Додати Д/З</button>
+                                    <button class="btn-small btn-small-primary" type="button" onclick="jumpToMaterialsTab()">📚 Додати матеріал</button>
                                 </div>
                             </div>
                             <div class="pill">Порада: натисни “➕ Матеріал” або “➕ Д/З” біля конкретного уроку — ми заповнимо форму.</div>
@@ -2391,12 +2447,12 @@
 
             const lessonOptions = `<option value="">(без прив'язки)</option>` + lessons.map(s => {
                 const label = `${formatDateUA(s.date)} ${s.time} — ${s.name}`;
-                return `<option value="${s.id}">${label}</option>`;
+                return `<option value="${s.id}">${escapeHtml(label)}</option>`;
             }).join('');
 
             container.innerHTML = `
                 <div class="card" style="margin-bottom: 15px;">
-                    <h3>Додати домашнє завдання для ${student.name}</h3>
+                    <h3>Додати домашнє завдання для ${escapeHtml(student.name)}</h3>
                     <form onsubmit="addHomeworkForStudent(event)">
                         <div class="two-col">
                             <div class="form-group">
@@ -2439,35 +2495,35 @@
 
                         return `
                             <div class="assignment" style="border-left-color: var(--color-info);">
-                                <h4 style="margin-bottom: 6px;">${a.title}</h4>
+                                <h4 style="margin-bottom: 6px;">${escapeHtml(a.title)}</h4>
                                 <div class="assignment-meta" style="margin-bottom: 8px;">
                                     <small>📅 Дедлайн: ${a.deadline ? formatDateUA(a.deadline) : '-'}</small>
-                                    <small>Статус: <span class="status-${status}">${getStatusLabel(status)}</span></small>
-                                    ${linked ? `<small>🔗 ${formatDateUA(linked.date)} • ${linked.name}</small>` : ''}
+                                    <small>Статус: <span class="status-${escapeHtml(status)}">${getStatusLabel(status)}</span></small>
+                                    ${linked ? `<small>🔗 ${formatDateUA(linked.date)} • ${escapeHtml(linked.name)}</small>` : ''}
                                 </div>
-                                ${a.description ? `<p style="margin: 0 0 10px 0;">${a.description}</p>` : ''}
+                                ${a.description ? `<p style="margin: 0 0 10px 0;">${escapeHtml(a.description)}</p>` : ''}
 
                                 ${a.teacherFiles && a.teacherFiles.length ? `
                                     <div style="background:#fff; border: 1px dashed var(--color-border); padding: 10px; border-radius: var(--radius); margin-bottom: 10px;">
-                                        <div class="muted"><strong>📎 Файли від викладача:</strong> ${a.teacherFiles.join(', ')}</div>
+                                        <div class="muted"><strong>📎 Файли від викладача:</strong> ${a.teacherFiles.map(escapeHtml).join(', ')}</div>
                                     </div>
                                 ` : ''}
 
                                 ${submission ? `
                                     <div style="background:#fff; border: 1px dashed var(--color-border); padding: 10px; border-radius: var(--radius); margin-bottom: 10px;">
-                                        <div class="muted"><strong>📤 Здача учня:</strong> ${submission.date || ''}</div>
-                                        ${submission.text ? `<div style="margin-top:6px;">${String(submission.text).replace(/\n/g,'<br>')}</div>` : ''}
-                                        ${submission.files && submission.files.length ? `<div class="muted" style="margin-top:6px;">Файли: ${submission.files.join(', ')}</div>` : ''}
+                                        <div class="muted"><strong>📤 Здача учня:</strong> ${escapeHtml(submission.date || '')}</div>
+                                        ${submission.text ? `<div style="margin-top:6px;">${escapeHtml(String(submission.text)).replace(/\n/g,'<br>')}</div>` : ''}
+                                        ${submission.files && submission.files.length ? `<div class="muted" style="margin-top:6px;">Файли: ${submission.files.map(escapeHtml).join(', ')}</div>` : ''}
                                     </div>
                                 ` : `<div class="muted" style="margin-bottom: 10px;">Учень ще не завантажував рішення.</div>`}
 
                                 <div class="form-group" style="margin-bottom: 10px;">
                                     <label style="font-size: 12px;">Коментар викладача</label>
-                                    <textarea id="comment_${a.id}" placeholder="Коментар...">${comment || ''}</textarea>
+                                    <textarea id="comment_${a.id}" placeholder="Коментар...">${escapeHtml(comment || '')}</textarea>
                                 </div>
                                 <div class="inline-actions">
-                                    <button class="btn-small btn-small-secondary" onclick="saveTeacherComment('${a.id}')">💬 Зберегти коментар</button>
-                                    <button class="btn-small btn-small-secondary" onclick="deleteHomework('${a.id}')">🗑️ Видалити</button>
+                                    <button class="btn-small btn-small-secondary" type="button" onclick="saveTeacherComment('${a.id}')">💬 Зберегти коментар</button>
+                                    <button class="btn-small btn-small-secondary" type="button" onclick="deleteHomework('${a.id}')">🗑️ Видалити</button>
                                 </div>
                             </div>
                         `;
@@ -2542,7 +2598,7 @@
 
             const lessonOptions = `<option value="">(без прив'язки)</option>` + lessons.map(s => {
                 const label = `${formatDateUA(s.date)} ${s.time} — ${s.name}`;
-                return `<option value="${s.id}">${label}</option>`;
+                return `<option value="${s.id}">${escapeHtml(label)}</option>`;
             }).join('');
 
             const today = new Date();
@@ -2550,7 +2606,7 @@
 
             container.innerHTML = `
                 <div class="card" style="margin-bottom: 15px;">
-                    <h3>Додати матеріал для ${student.name}</h3>
+                    <h3>Додати матеріал для ${escapeHtml(student.name)}</h3>
                     <form onsubmit="addMaterialForStudent(event)">
                         <div class="two-col">
                             <div class="form-group">
@@ -2593,19 +2649,19 @@
                             <div class="assignment" style="border-left-color: var(--color-success);">
                                 <div style="display:flex; justify-content: space-between; gap: 12px; align-items: flex-start;">
                                     <div style="flex:1;">
-                                        <h4 style="margin-bottom: 6px;">${m.title}</h4>
+                                        <h4 style="margin-bottom: 6px;">${escapeHtml(m.title)}</h4>
                                         <div class="assignment-meta" style="margin-bottom: 8px;">
                                             <small>📅 ${m.date ? formatDateUA(m.date) : ''}</small>
-                                            ${linked ? `<small>🔗 ${formatDateUA(linked.date)} • ${linked.name}</small>` : ''}
+                                            ${linked ? `<small>🔗 ${formatDateUA(linked.date)} • ${escapeHtml(linked.name)}</small>` : ''}
                                         </div>
-                                        ${m.description ? `<p style="margin: 0 0 10px 0;">${m.description}</p>` : ''}
+                                        ${m.description ? `<p style="margin: 0 0 10px 0;">${escapeHtml(m.description)}</p>` : ''}
                                         ${m.files && m.files.length ? `
                                             <div style="background:#fff; border: 1px dashed var(--color-border); padding: 10px; border-radius: var(--radius); margin-bottom: 10px;">
-                                                <div class="muted"><strong>📎 Файли:</strong> ${m.files.join(', ')}</div>
+                                                <div class="muted"><strong>📎 Файли:</strong> ${m.files.map(escapeHtml).join(', ')}</div>
                                             </div>
                                         ` : ''}
                                         <div class="inline-actions">
-                                            <button class="btn-small btn-small-secondary" onclick="deleteMaterial('${m.id}')">🗑️ Видалити</button>
+                                            <button class="btn-small btn-small-secondary" type="button" onclick="deleteMaterial('${m.id}')">🗑️ Видалити</button>
                                         </div>
                                     </div>
                                 </div>
@@ -2679,7 +2735,7 @@
             container.innerHTML = available.map(s => `
                 <div style="padding: 8px; display: flex; gap: 10px; align-items: center;">
                     <input type="checkbox" id="addTeacherStudent_${s.id}" value="${s.id}">
-                    <label for="addTeacherStudent_${s.id}" style="cursor: pointer;">${s.name} (${s.email})</label>
+                    <label for="addTeacherStudent_${s.id}" style="cursor: pointer;">${escapeHtml(s.name)} (${escapeHtml(s.email)})</label>
                 </div>
             `).join('');
         }
@@ -2742,9 +2798,9 @@
                 <div class="calendar">
                     <div class="calendar-header">
                         <div class="calendar-controls">
-                            <button onclick="changeStudentMonth(-1)">←</button>
+                            <button type="button" onclick="changeStudentMonth(-1)">←</button>
                             <span>${monthNames[currentMonth]} ${currentYear}</span>
-                            <button onclick="changeStudentMonth(1)">→</button>
+                            <button type="button" onclick="changeStudentMonth(1)">→</button>
                         </div>
                     </div>
                     <div class="weekdays">
@@ -2799,13 +2855,13 @@
                     return `
                         <div class="schedule-item">
                             <div class="schedule-info">
-                                <strong>${sched.name}</strong>
-                                <small>${sched.time}</small>
-                                <small style="color: var(--color-primary); display: block; margin-top: 4px;">Викладач: ${teacher ? teacher.name : 'N/A'}</small>
+                                <strong>${escapeHtml(sched.name)}</strong>
+                                <small>${escapeHtml(sched.time)}</small>
+                                <small style="color: var(--color-primary); display: block; margin-top: 4px;">Викладач: ${teacher ? escapeHtml(teacher.name) : 'N/A'}</small>
                             </div>
                             <div class="schedule-platform">
-                                <span class="badge badge-platform">${sched.platform}</span>
-                                ${sched.link ? `<a href="${sched.link}" target="_blank" style="color: var(--color-primary); text-decoration: underline;">Посилання</a>` : ''}
+                                <span class="badge badge-platform">${escapeHtml(sched.platform)}</span>
+                                ${sched.link ? `<a href="${escapeHtml(sched.link)}" target="_blank" rel="noopener" style="color: var(--color-primary); text-decoration: underline;">Посилання</a>` : ''}
                             </div>
                         </div>
                     `;
@@ -2844,8 +2900,8 @@
 
             list.innerHTML = myAssignments.map(assign => `
                 <div class="assignment">
-                    <h4>${assign.title}</h4>
-                    <p>${assign.description || ''}</p>
+                    <h4>${escapeHtml(assign.title)}</h4>
+                    <p>${escapeHtml(assign.description || '')}</p>
                     <div class="assignment-meta">
                         <small>📅 Крайній термін: ${assign.deadline ? formatDateUA(assign.deadline) : '-'}</small>
                         <small>Статус: <span class="status-${(assign.studentStatus && assign.studentStatus[currentUser.id]) || 'not-started'}">
@@ -2853,26 +2909,26 @@
                         </span></small>
                         ${assign.linkedLessonId ? (() => {
                             const s = appData.schedule.find(x => x.id === assign.linkedLessonId);
-                            return s ? `<small>🔗 ${formatDateUA(s.date)} • ${s.name}</small>` : '';
+                            return s ? `<small>🔗 ${formatDateUA(s.date)} • ${escapeHtml(s.name)}</small>` : '';
                         })() : ''}
                     </div>
 
                     ${assign.teacherFiles && assign.teacherFiles.length ? `
                         <div style="background:#fff; border: 1px dashed var(--color-border); padding: 10px; border-radius: var(--radius); margin-bottom: 12px;">
                             <strong style="font-size: 12px;">📎 Файли від викладача:</strong>
-                            <div class="muted" style="margin-top: 6px;">${assign.teacherFiles.join(', ')}</div>
+                            <div class="muted" style="margin-top: 6px;">${assign.teacherFiles.map(escapeHtml).join(', ')}</div>
                         </div>
                     ` : ''}
 
                     ${assign.studentComments && assign.studentComments[currentUser.id] ? `
                         <div style="background: #f0f9ff; padding: 12px; border-radius: var(--radius); border-left: 4px solid var(--color-info); margin-bottom: 12px;">
                             <strong>💬 Коментар викладача:</strong>
-                            <p style="margin: 8px 0 0 0;">${assign.studentComments[currentUser.id]}</p>
+                            <p style="margin: 8px 0 0 0;">${escapeHtml(assign.studentComments[currentUser.id])}</p>
                         </div>
                     ` : ''}
                     <div class="assignment-actions">
-                        <button class="btn-small btn-small-primary" onclick="openAssignmentDetail('${assign.id}')">📂 Відкрити</button>
-                        <button class="btn-small btn-small-secondary" onclick="openSubmitAssignmentModal('${assign.id}')">📤 Загрузити</button>
+                        <button class="btn-small btn-small-primary" type="button" onclick="openAssignmentDetail('${assign.id}')">📂 Відкрити</button>
+                        <button class="btn-small btn-small-secondary" type="button" onclick="openSubmitAssignmentModal('${assign.id}')">📤 Загрузити</button>
                     </div>
                 </div>
             `).join('') || '<p style="color: #999;">Завдань немає</p>';
@@ -2886,15 +2942,15 @@
                 const linked = material.scheduleId ? appData.schedule.find(s => s.id === material.scheduleId) : null;
                 return `
                 <div class="card" style="margin-bottom: 15px;">
-                    <h4 style="color: var(--color-primary); margin: 0 0 8px 0;">${material.title}</h4>
+                    <h4 style="color: var(--color-primary); margin: 0 0 8px 0;">${escapeHtml(material.title)}</h4>
                     <small style="color: var(--color-text-light); display: block; margin-bottom: 8px;">📅 ${material.date ? formatDateUA(material.date) : ''}</small>
-                    ${linked ? `<small class="muted" style="display:block; margin-bottom: 8px;">🔗 До заняття: ${formatDateUA(linked.date)} • ${linked.name}</small>` : ''}
-                    ${material.description ? `<p style="margin: 8px 0;">${material.description}</p>` : ''}
+                    ${linked ? `<small class="muted" style="display:block; margin-bottom: 8px;">🔗 До заняття: ${formatDateUA(linked.date)} • ${escapeHtml(linked.name)}</small>` : ''}
+                    ${material.description ? `<p style="margin: 8px 0;">${escapeHtml(material.description)}</p>` : ''}
                     ${material.files && material.files.length > 0 ? `
                         <div style="background: #f9f9f9; padding: 12px; border-radius: var(--radius); margin-top: 10px;">
                             <strong style="font-size: 12px;">📎 Файли:</strong>
                             <ul style="margin: 8px 0 0 0; padding-left: 20px;">
-                                ${material.files.map(f => `<li style="font-size: 12px; margin-bottom: 4px;">${f}</li>`).join('')}
+                                ${material.files.map(f => `<li style="font-size: 12px; margin-bottom: 4px;">${escapeHtml(f)}</li>`).join('')}
                             </ul>
                         </div>
                     ` : ''}
@@ -2918,8 +2974,8 @@
             const teacherComment = assignment.studentComments ? assignment.studentComments[currentUser.id] : '';
 
             let html = `
-                <p><strong>Опис:</strong> ${assignment.description}</p>
-                <p><strong>Крайній термін:</strong> ${assignment.deadline}</p>
+                <p><strong>Опис:</strong> ${escapeHtml(assignment.description || '')}</p>
+                <p><strong>Крайній термін:</strong> ${escapeHtml(assignment.deadline || '')}</p>
                 <p><strong>Статус:</strong> ${getStatusLabel(status)}</p>
             `;
 
@@ -2927,7 +2983,7 @@
                 html += `
                     <div style="background:#fff; border: 1px dashed var(--color-border); padding: 10px; border-radius: var(--radius); margin: 12px 0;">
                         <strong style="font-size: 12px;">📎 Файли від викладача:</strong>
-                        <div class="muted" style="margin-top: 6px;">${assignment.teacherFiles.join(', ')}</div>
+                        <div class="muted" style="margin-top: 6px;">${assignment.teacherFiles.map(escapeHtml).join(', ')}</div>
                     </div>
                 `;
             }
@@ -2936,7 +2992,7 @@
                 html += `
                     <div style="background: #f0f9ff; padding: 12px; border-radius: var(--radius); border-left: 4px solid var(--color-info); margin: 12px 0;">
                         <strong>💬 Коментар викладача:</strong>
-                        <p style="margin: 8px 0 0 0;">${teacherComment}</p>
+                        <p style="margin: 8px 0 0 0;">${escapeHtml(teacherComment)}</p>
                     </div>
                 `;
             }
@@ -2945,13 +3001,13 @@
                 html += `
                     <div style="background: #f9f9f9; padding: 15px; border-radius: var(--radius); margin-top: 15px;">
                         <h4 style="color: var(--color-primary); margin-bottom: 10px;">📤 Ваше рішення</h4>
-                        <p><strong>Дата здачі:</strong> ${submission.date}</p>
-                        ${submission.text ? `<p><strong>Текст:</strong><br>${String(submission.text).replace(/\n/g, '<br>')}</p>` : ''}
+                        <p><strong>Дата здачі:</strong> ${escapeHtml(submission.date || '')}</p>
+                        ${submission.text ? `<p><strong>Текст:</strong><br>${escapeHtml(String(submission.text)).replace(/\n/g, '<br>')}</p>` : ''}
                         ${submission.files && submission.files.length > 0 ? `
                             <div style="margin-top: 10px;">
                                 <strong>📎 Файли:</strong>
                                 <ul style="margin: 5px 0 0 0; padding-left: 20px;">
-                                    ${submission.files.map(file => `<li>${file}</li>`).join('')}
+                                    ${submission.files.map(file => `<li>${escapeHtml(file)}</li>`).join('')}
                                 </ul>
                             </div>
                         ` : ''}
@@ -3006,6 +3062,11 @@
             assert('validateEmail bad', validateEmail('a@b') === false);
             assert('getLessonsForStudent returns sched_1 for student_1', getLessonsForStudent('teacher_001', 'student_1').some(x => x.id === 'sched_1'));
             assert('teacher_001 canAddStudents demo', appData.users['teacher_001'].canAddStudents === true);
+
+            // Additional tests
+            assert('escapeHtml escapes tags', escapeHtml('<b>') === '&lt;b&gt;');
+            assert('demo user exists', !!findDemoUser('admin@example.com', 'demo123'));
+
             // time picker helpers exist + return HH:MM
             const hEl = document.getElementById('schedHour');
             const mEl = document.getElementById('schedMinute');
@@ -3015,13 +3076,27 @@
                 assert('getTimeFromPickers 24h', getTimeFromPickers() === '09:15');
                 setTimePickers('21:05');
                 assert('setTimePickers sets hour', document.getElementById('schedHour').value === '21');
+                setTimePickers('21:58');
+                assert('setTimePickers snaps minutes to 55 max', document.getElementById('schedMinute').value === '55');
             }
+
+            // Supabase guards should never throw without config
+            assert('supabase configured is false by default', isSupabaseConfigured() === false);
+            assert('getSupabaseClient returns null by default', getSupabaseClient() === null);
         }
 
         // Init (demo lists) + auth bootstrap
         renderUsersList();
         renderAllAssignments();
         bootstrapAuth();
+
+        // Helpful: show more details than "Script error." when possible.
+        window.addEventListener('error', (e) => {
+            try {
+                if (e?.error) console.error(e.error);
+                else console.error(e?.message || e);
+            } catch (_) {}
+        });
 
         if (new URLSearchParams(location.search).get('test') === '1') {
             runSelfTests();
