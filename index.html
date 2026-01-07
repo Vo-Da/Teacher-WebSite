@@ -847,10 +847,7 @@
                         <a onclick="openPasswordResetModal()" style="color: var(--color-primary);">Забули пароль?</a>
                     </div>
                 </div>
-                <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--color-border); font-size: 12px; color: var(--color-text-light);">
-                    <strong>Демо акаунти:</strong>
-                    <div>Admin: admin@example.com / demo123</div>
-                    <div>Teacher: teacher@example.com / demo123</div>
+<div>Teacher: teacher@example.com / demo123</div>
                     <div>Student: maria@example.com / demo123</div>
                 </div>
             </div>
@@ -1200,8 +1197,6 @@
 
     <script>
         // ===== Supabase (Auth + profiles) =====
-        // 1) У Supabase: Settings → API → встав сюди Project URL та anon public key
-        // 2) Важливо: service_role key НІКОЛИ не вставляй у фронтенд.
         const SUPABASE_URL = 'https://dmphjqstprqgvoanargh.supabase.co';
         const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRtcGhqcXN0cHJxZ3ZvYW5hcmdoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3ODMxNTYsImV4cCI6MjA4MzM1OTE1Nn0.UVVpm4LezWQNT28wXX2pzxWVQSPCVm8OX2NslqM6Nns';
         const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -1364,6 +1359,16 @@
                 .replaceAll('>', '&gt;')
                 .replaceAll('"', '&quot;')
                 .replaceAll("'", '&#039;');
+        }
+
+        // Важливо для email-confirmation / password reset редіректів.
+        // Для GitHub Pages нам потрібна адреса з підпапкою репозиторію і з / в кінці.
+        function getAppUrl() {
+            let url = location.origin + location.pathname;
+            // якщо відкрито /index.html — приводимо до папки
+            url = url.replace(/index\.html$/i, '');
+            url = url.endsWith('/') ? url : (url + '/');
+            return url;
         }
 
         // ===== Supabase profile sync =====
@@ -1532,7 +1537,9 @@
                     email,
                     password,
                     options: {
-                        data: { full_name: name }
+                        data: { full_name: name },
+                        // куди повернути користувача після кліку “Confirm your mail”
+                        emailRedirectTo: getAppUrl()
                     }
                 });
 
