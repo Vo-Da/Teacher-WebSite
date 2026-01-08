@@ -857,10 +857,15 @@
         const SUPABASE_URL = 'https://dmphjqstprqgvoanargh.supabase.co';
         const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRtcGhqcXN0cHJxZ3ZvYW5hcmdoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3ODMxNTYsImV4cCI6MjA4MzM1OTE1Nn0.UVVpm4LezWQNT28wXX2pzxWVQSPCVm8OX2NslqM6Nns';
 
+        // email власника сайту. Цей користувач буде мати роль admin.
+        const OWNER_EMAIL = 'daria.voronova@ukr.net'; // 
+
         // ========================
         //  SUPABASE INIT (SAFE)
         // ========================
         let sb = null;
+        // For recovery links we want better diagnostics
+        let __recoveryLastError = null;
         function isSupabaseConfigured() {
             return typeof SUPABASE_URL === 'string'
                 && typeof SUPABASE_ANON_KEY === 'string'
@@ -874,7 +879,13 @@
             if (sb) return sb;
             if (!isSupabaseConfigured() || !isSupabaseLoaded()) return null;
             try {
-                sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+                sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+                    auth: {
+                        persistSession: true,
+                        autoRefreshToken: true,
+                        detectSessionInUrl: true
+                    }
+                });
                 return sb;
             } catch (e) {
                 console.warn('Supabase init failed:', e);
@@ -1021,6 +1032,11 @@
             return url;
         }
 
+        function isOwnerEmail(email) {
+            if (!OWNER_EMAIL) return false;
+            return String(email || '').trim().toLowerCase() === String(OWNER_EMAIL).trim().toLowerCase();
+        }
+
         function isRecoveryFromUrl() {
             const qs = new URLSearchParams(location.search);
             // Supabase може повертати або ?mode=recovery (наш redirect), або ?type=recovery, або ?code=... (PKCE)
@@ -1035,12 +1051,15 @@
         // With PKCE links, Supabase returns ?code=... and we MUST exchange it for a session.
         async function ensureRecoverySession(client) {
             if (!client) return null;
+            __recoveryLastError = null;
 
             // 1) Try existing session (covers hash-token flows)
             try {
                 const { data } = await client.auth.getSession();
                 if (data?.session) return data.session;
-            } catch (_) {}
+            } catch (e) {
+                // ignore
+            }
 
             // 2) PKCE: exchange ?code=... for a session
             try {
@@ -1049,14 +1068,23 @@
                 if (code) {
                     const { data, error } = await client.auth.exchangeCodeForSession(code);
                     if (error) {
+                        __recoveryLastError = error.message || String(error);
                         console.warn('exchangeCodeForSession failed:', error);
                         return null;
                     }
                     return data?.session || null;
                 }
             } catch (e) {
+                __recoveryLastError = String(e);
                 console.warn('ensureRecoverySession failed:', e);
             }
+
+            // 3) As a last attempt, try to let supabase parse URL itself
+            // (some environments populate session async)
+            try {
+                const { data } = await client.auth.getSession();
+                if (data?.session) return data.session;
+            } catch (_) {}
 
             return null;
         }
@@ -1190,13 +1218,29 @@
 
             let profile = await getMyProfile(authUser.id);
             if (!profile) {
+                // ⚙️ За замовчуванням — student.
+                // Але OWNER_EMAIL отримує admin автоматично (одноразово при першому логіні).
+                const initialRole = isOwnerEmail(authUser.email) ? 'admin' : 'student';
+
                 await upsertMyProfile({
                     full_name: authUser.user_metadata?.full_name || authUser.email,
-                    role: 'student',
+                    role: initialRole,
                     legacy_id: null,
                     can_add_students: false
                 }, authUser.id);
+
                 profile = await getMyProfile(authUser.id);
+            } else {
+                // Якщо це власник сайту — гарантуємо роль admin (на випадок, якщо створилось як student).
+                if (isOwnerEmail(authUser.email) && profile.role !== 'admin') {
+                    await upsertMyProfile({
+                        full_name: profile.full_name || authUser.user_metadata?.full_name || authUser.email,
+                        role: 'admin',
+                        legacy_id: profile.legacy_id || null,
+                        can_add_students: !!profile.can_add_students
+                    }, authUser.id);
+                    profile = await getMyProfile(authUser.id);
+                }
             }
 
             const legacyId = profile?.legacy_id || authUser.id;
@@ -1268,13 +1312,26 @@
             // 2) if arrived via recovery link, force showing reset modal
             if (isRecoveryFromUrl()) {
                 // Ensure recovery session exists (PKCE links require exchangeCodeForSession)
-                await ensureRecoverySession(client);
+                const sess = await ensureRecoverySession(client);
 
                 document.getElementById('authScreen').style.display = 'flex';
                 document.getElementById('adminDashboard').classList.remove('active');
                 document.getElementById('teacherDashboard').classList.remove('active');
                 document.getElementById('studentDashboard').classList.remove('active');
                 openPasswordResetModal(true);
+
+                // If session couldn't be established, show a helpful message immediately
+                if (!sess) {
+                    const box = document.getElementById('resetNewPwdError');
+                    const details = __recoveryLastError ? `<div class="muted" style="margin-top:6px;">Деталі: ${escapeHtml(__recoveryLastError)}</div>` : '';
+                    if (box) {
+                        box.innerHTML = `<div class="error-message">Не вдалося відкрити сесію відновлення. Найчастіше це стається, якщо:
+                        <br>• посилання відкрито в іншому браузері/вбудованому браузері (Gmail/Instagram/Telegram)
+                        <br>• або посилання вже використали / воно застаріло.
+                        <br><br>✅ Рішення: натисніть «Забули пароль?» на сайті ще раз і відкрийте нове посилання у тому ж браузері, де ви це зробили (або скопіюйте лінк і вставте в Chrome/Safari вручну).${details}</div>`;
+                    }
+                }
+
                 // NOTE: URL will be cleaned after successful password update.
                 return;
             }
@@ -1482,7 +1539,11 @@
                 // Ensure we really have a recovery session before updating password
                 const session = await ensureRecoverySession(client);
                 if (!session) {
-                    errorDiv.innerHTML = '<div class="error-message">Немає активної сесії відновлення. Відкрийте посилання зі листа ще раз (саме на цьому пристрої/браузері) і повторіть спробу.</div>';
+                    const details = __recoveryLastError ? `<div class="muted" style="margin-top:6px;">Деталі: ${escapeHtml(__recoveryLastError)}</div>` : '';
+                    errorDiv.innerHTML = `<div class="error-message">Немає активної сесії відновлення. Посилання може бути:
+                    <br>• відкрито не в тому браузері (вбудований браузер пошти/месенджера),
+                    <br>• або вже використане / застаріле.
+                    <br><br>✅ Зробіть так: натисніть «Забули пароль?» ще раз, отримайте новий лист і відкрийте посилання у тому ж браузері, де відправляли запит (або скопіюйте лінк і вставте в Chrome/Safari).${details}</div>`;
                     return;
                 }
 
