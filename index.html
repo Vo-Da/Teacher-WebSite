@@ -1406,6 +1406,15 @@
             const errorDiv = document.getElementById('loginError');
             errorDiv.innerHTML = '';
 
+            const btn = document.getElementById('loginBtn');
+            const oldBtnText = btn ? btn.textContent : '';
+            const setLoading = (on) => {
+                if (!btn) return;
+                btn.disabled = !!on;
+                btn.style.opacity = on ? '0.85' : '';
+                btn.textContent = on ? 'Вхід…' : oldBtnText;
+            };
+
             if (!email || !password) {
                 errorDiv.innerHTML = '<div class="error-message">Заповніть всі поля</div>';
                 return;
@@ -1420,20 +1429,61 @@
                     return;
                 }
                 currentUser = { ...demo };
-                showDashboard();
+                try {
+                    showDashboard();
+                } catch (e) {
+                    console.error('showDashboard failed (demo):', e);
+                    errorDiv.innerHTML = '<div class="error-message">Помилка відображення кабінету (демо). Відкрийте Console і надішліть помилку.</div>';
+                }
                 return;
             }
+
+            setLoading(true);
+            window.__lastLoginDebug = { step: 'start', email };
 
             try {
                 const { data, error } = await client.auth.signInWithPassword({ email, password });
                 if (error) {
+                    window.__lastLoginDebug = { step: 'signInWithPassword_error', email, error: error.message };
                     errorDiv.innerHTML = `<div class="error-message">${escapeHtml(error.message)}</div>`;
                     return;
                 }
-                await setCurrentUserFromSession(data.session);
-                showDashboard();
+
+                // Іноді session може бути null (наприклад, спец. налаштування/мультифактор). Підстрахуємось.
+                let session = data?.session || null;
+                if (!session) {
+                    const { data: s } = await client.auth.getSession();
+                    session = s?.session || null;
+                }
+
+                if (!session || !session.user) {
+                    window.__lastLoginDebug = { step: 'no_session_after_login', email };
+                    errorDiv.innerHTML = '<div class="error-message">Не вдалося отримати сесію після входу. Якщо ви щойно реєструвались — перевірте підтвердження email у пошті. Якщо увімкнено MFA — потрібне додаткове підтвердження.</div>';
+                    return;
+                }
+
+                window.__lastLoginDebug = { step: 'session_ok', email, user_id: session.user.id };
+                await setCurrentUserFromSession(session);
+
+                if (!currentUser) {
+                    window.__lastLoginDebug = { step: 'currentUser_not_set', email };
+                    errorDiv.innerHTML = '<div class="error-message">Вхід успішний, але не вдалося створити профіль користувача. Ймовірно, RLS-політики для таблиці profiles блокують доступ. Відкрийте Console і надішліть повідомлення з помилками.</div>';
+                    return;
+                }
+
+                try {
+                    showDashboard();
+                } catch (e) {
+                    console.error('showDashboard failed:', e);
+                    window.__lastLoginDebug = { step: 'showDashboard_failed', email, err: String(e) };
+                    errorDiv.innerHTML = '<div class="error-message">Помилка відображення кабінету після входу. Відкрийте Console і надішліть помилку (F12 → Console).</div>';
+                }
             } catch (err) {
+                console.error('login() fatal:', err);
+                window.__lastLoginDebug = { step: 'fatal', email, err: String(err) };
                 errorDiv.innerHTML = `<div class="error-message">Помилка входу: ${escapeHtml(String(err))}</div>`;
+            } finally {
+                setLoading(false);
             }
         }
 
@@ -1651,6 +1701,14 @@
         //  NAV
         // ========================
         function showDashboard() {
+            // Guard: якщо currentUser не встановився — не падаємо "тихо"
+            if (!currentUser || !currentUser.role) {
+                const err = document.getElementById('loginError');
+                if (err) err.innerHTML = '<div class="error-message">Не вдалося відкрити кабінет: currentUser не визначено. Відкрийте Console (F12) і надішліть помилки або виконайте debugAuth().</div>';
+                console.error('showDashboard: currentUser is missing', currentUser);
+                return;
+            }
+
             document.getElementById('authScreen').style.display = 'none';
 
             if (currentUser.role === 'admin') {
