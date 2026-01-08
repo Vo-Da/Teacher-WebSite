@@ -1023,16 +1023,54 @@
 
         function isRecoveryFromUrl() {
             const qs = new URLSearchParams(location.search);
+            // Supabase може повертати або ?mode=recovery (наш redirect), або ?type=recovery, або ?code=... (PKCE)
             if (qs.get('mode') === 'recovery') return true;
+            if (qs.get('type') === 'recovery') return true;
+            if (qs.has('code')) return true;
             const hash = String(location.hash || '');
             return /type=recovery/i.test(hash);
         }
 
-        function stripHashFromUrl() {
+        // Ensures we have an auth session in PASSWORD_RECOVERY flow.
+        // With PKCE links, Supabase returns ?code=... and we MUST exchange it for a session.
+        async function ensureRecoverySession(client) {
+            if (!client) return null;
+
+            // 1) Try existing session (covers hash-token flows)
             try {
-                if (location.hash) {
-                    history.replaceState({}, document.title, location.pathname + location.search);
+                const { data } = await client.auth.getSession();
+                if (data?.session) return data.session;
+            } catch (_) {}
+
+            // 2) PKCE: exchange ?code=... for a session
+            try {
+                const url = new URL(location.href);
+                const code = url.searchParams.get('code');
+                if (code) {
+                    const { data, error } = await client.auth.exchangeCodeForSession(code);
+                    if (error) {
+                        console.warn('exchangeCodeForSession failed:', error);
+                        return null;
+                    }
+                    return data?.session || null;
                 }
+            } catch (e) {
+                console.warn('ensureRecoverySession failed:', e);
+            }
+
+            return null;
+        }
+
+        function stripHashFromUrl() {
+            // Чистимо URL ПІСЛЯ успішної зміни паролю (щоб не зламати встановлення сесії).
+            try {
+                const url = new URL(location.href);
+                url.hash = '';
+                url.searchParams.delete('mode');
+                url.searchParams.delete('type');
+                url.searchParams.delete('code');
+                const qs = url.searchParams.toString();
+                history.replaceState({}, document.title, url.pathname + (qs ? ('?' + qs) : ''));
             } catch (_) {}
         }
 
@@ -1215,8 +1253,9 @@
                     document.getElementById('adminDashboard').classList.remove('active');
                     document.getElementById('teacherDashboard').classList.remove('active');
                     document.getElementById('studentDashboard').classList.remove('active');
+
+                    // IMPORTANT: do NOT strip URL here — we may need code/hash to create a session.
                     openPasswordResetModal(true);
-                    setTimeout(stripHashFromUrl, 0);
                     return;
                 }
 
@@ -1228,13 +1267,15 @@
 
             // 2) if arrived via recovery link, force showing reset modal
             if (isRecoveryFromUrl()) {
-                try { await client.auth.getSession(); } catch (_) {}
+                // Ensure recovery session exists (PKCE links require exchangeCodeForSession)
+                await ensureRecoverySession(client);
+
                 document.getElementById('authScreen').style.display = 'flex';
                 document.getElementById('adminDashboard').classList.remove('active');
                 document.getElementById('teacherDashboard').classList.remove('active');
                 document.getElementById('studentDashboard').classList.remove('active');
                 openPasswordResetModal(true);
-                setTimeout(stripHashFromUrl, 0);
+                // NOTE: URL will be cleaned after successful password update.
                 return;
             }
 
@@ -1438,22 +1479,36 @@
             }
 
             try {
+                // Ensure we really have a recovery session before updating password
+                const session = await ensureRecoverySession(client);
+                if (!session) {
+                    errorDiv.innerHTML = '<div class="error-message">Немає активної сесії відновлення. Відкрийте посилання зі листа ще раз (саме на цьому пристрої/браузері) і повторіть спробу.</div>';
+                    return;
+                }
+
                 const { error } = await client.auth.updateUser({ password: pwd1 });
                 if (error) {
                     errorDiv.innerHTML = `<div class="error-message">${escapeHtml(error.message)}</div>`;
                     return;
                 }
 
-                successDiv.innerHTML = '<div class="success-message">Пароль успішно змінено! Увійдіть з новим паролем.</div>';
+                successDiv.innerHTML = '<div class="success-message">Пароль успішно змінено! Зараз повернемо вас на сторінку входу.</div>';
 
+                // ПОВЕДІНКА (1): повернути на логін і НЕ логінити автоматично
                 setTimeout(async () => {
-                    try { await client.auth.signOut(); } catch (_) {}
+                    try {
+                        sessionStorage.setItem('pw_updated', '1');
+                    } catch (_) {}
+
+                    // Важливо: після recovery користувач має сесію. Щоб не залогінити автоматично — робимо signOut.
+                    try {
+                        await client.auth.signOut();
+                    } catch (_) {}
+
+                    stripHashFromUrl();
                     closeModal('passwordResetModal');
-                    document.getElementById('authScreen').style.display = 'flex';
-                    document.getElementById('adminDashboard').classList.remove('active');
-                    document.getElementById('teacherDashboard').classList.remove('active');
-                    document.getElementById('studentDashboard').classList.remove('active');
-                }, 900);
+                    window.location.replace(getAppUrl());
+                }, 700);
 
             } catch (err) {
                 errorDiv.innerHTML = `<div class="error-message">Помилка: ${escapeHtml(String(err))}</div>`;
@@ -2657,6 +2712,15 @@
         //  INIT
         // ========================
         document.addEventListener('DOMContentLoaded', () => {
+            // show a one-time success after password update
+            try {
+                if (sessionStorage.getItem('pw_updated') === '1') {
+                    sessionStorage.removeItem('pw_updated');
+                    const err = document.getElementById('loginError');
+                    if (err) err.innerHTML = '<div class="success-message">Пароль змінено ✅ Тепер увійдіть з новим паролем.</div>';
+                }
+            } catch (_) {}
+
             // initial renders so admin dashboard doesn't look empty in demo
             renderUsersList();
             renderAllAssignments();
