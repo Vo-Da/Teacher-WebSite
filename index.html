@@ -478,6 +478,25 @@
                 <p>Доступ до Портала</p>
 
                 <div id="loginError"></div>
+
+                <!-- Supabase setup (без редагування коду) -->
+                <div id="supabaseSetup" style="display:none; margin: 12px 0 2px; padding: 12px; border: 1px solid rgba(0,0,0,0.08); border-radius: 12px; background: linear-gradient(135deg, rgba(33,141,141,0.08), rgba(52,152,219,0.06));">
+                    <div style="font-weight: 800; color: #0f172a; margin-bottom: 6px;">⚙️ Підключення Supabase</div>
+                    <div class="muted" style="margin-bottom: 10px;">Встав Project URL та anon public key (Settings → API). Збережемо у цьому браузері.</div>
+                    <div class="form-group" style="margin-bottom: 10px;">
+                        <label for="sbUrl" style="font-size: 12px;">Supabase URL</label>
+                        <input id="sbUrl" type="text" placeholder="https://xxxx.supabase.co" />
+                    </div>
+                    <div class="form-group" style="margin-bottom: 10px;">
+                        <label for="sbAnon" style="font-size: 12px;">Supabase anon public key</label>
+                        <input id="sbAnon" type="text" placeholder="eyJhbGciOi..." />
+                    </div>
+                    <div class="inline-actions" style="margin-top: 6px;">
+                        <button id="saveSupabaseBtn" class="btn-small btn-small-primary" type="button" style="padding: 8px 12px;">Зберегти і перезавантажити</button>
+                        <button id="clearSupabaseBtn" class="btn-small btn-small-secondary" type="button" style="padding: 8px 12px;">Скинути</button>
+                        <span class="muted">(демо-режим працює без Supabase)</span>
+                    </div>
+                </div>
                 <div class="form-group">
                     <label for="loginEmail">Email:</label>
                     <input type="email" id="loginEmail" placeholder="your@email.com" required />
@@ -486,11 +505,11 @@
                     <label for="loginPassword">Пароль:</label>
                     <input type="password" id="loginPassword" placeholder="••••••••" required />
                 </div>
-                <button class="btn btn-primary" type="button" onclick="login()">Увійти</button>
+                <button id="loginBtn" class="btn btn-primary" type="button">Увійти</button>
                 <div class="toggle-link">
-                    Немає акаунту? <a onclick="toggleAuth()">Зареєструватися</a>
+                    Немає акаунту? <a id="toRegisterLink" href="#">Зареєструватися</a>
                     <div style="margin-top: 10px; font-size: 12px;">
-                        <a onclick="openPasswordResetModal(false)" style="color: var(--color-primary);">Забули пароль?</a>
+                        <a id="forgotPwdLink" href="#" style="color: var(--color-primary);">Забули пароль?</a>
                     </div>
                 </div>
             </div>
@@ -526,9 +545,9 @@
                     <input type="password" id="regPasswordConfirm" placeholder="Повторіть пароль" required />
                 </div>
 
-                <button class="btn btn-primary" type="button" onclick="register()">Зареєструватися</button>
+                <button id="registerBtn" class="btn btn-primary" type="button">Зареєструватися</button>
                 <div class="toggle-link">
-                    Вже є акаунт? <a onclick="toggleAuth()">Увійти</a>
+                    Вже є акаунт? <a id="toLoginLink" href="#">Увійти</a>
                 </div>
             </div>
         </div>
@@ -857,8 +876,9 @@
         const SUPABASE_URL = 'https://dmphjqstprqgvoanargh.supabase.co';
         const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRtcGhqcXN0cHJxZ3ZvYW5hcmdoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3ODMxNTYsImV4cCI6MjA4MzM1OTE1Nn0.UVVpm4LezWQNT28wXX2pzxWVQSPCVm8OX2NslqM6Nns';
 
-        // email власника сайту. Цей користувач буде мати роль admin.
-        const OWNER_EMAIL = 'daria.voronova@ukr.net'; // 
+        // ✅ Вкажи email власника сайту (ти). Цей користувач буде мати роль admin.
+        // Порада: зроби exact match до регістру не прив'язуйся — ми порівнюємо lowercased.
+        const OWNER_EMAIL = 'daria.voronova@ukr.net'; // <-- заміни на свій email (або залиш, якщо це ти)
 
         // ========================
         //  SUPABASE INIT (SAFE)
@@ -866,11 +886,27 @@
         let sb = null;
         // For recovery links we want better diagnostics
         let __recoveryLastError = null;
+        function getSupabaseConfig() {
+            // Prefer localStorage values (set via UI), fallback to constants.
+            let url = '';
+            let key = '';
+            try {
+                url = (localStorage.getItem('sb_url') || '').trim();
+                key = (localStorage.getItem('sb_anon') || '').trim();
+            } catch (_) {}
+
+            if (!url) url = String(SUPABASE_URL || '').trim();
+            if (!key) key = String(SUPABASE_ANON_KEY || '').trim();
+
+            return { url, key };
+        }
+
         function isSupabaseConfigured() {
-            return typeof SUPABASE_URL === 'string'
-                && typeof SUPABASE_ANON_KEY === 'string'
-                && SUPABASE_URL.startsWith('http')
-                && SUPABASE_ANON_KEY.startsWith('ey');
+            const { url, key } = getSupabaseConfig();
+            return typeof url === 'string'
+                && typeof key === 'string'
+                && url.startsWith('http')
+                && key.startsWith('ey');
         }
         function isSupabaseLoaded() {
             return !!(window.supabase && typeof window.supabase.createClient === 'function');
@@ -879,7 +915,8 @@
             if (sb) return sb;
             if (!isSupabaseConfigured() || !isSupabaseLoaded()) return null;
             try {
-                sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+                const cfg = getSupabaseConfig();
+                sb = window.supabase.createClient(cfg.url, cfg.key, {
                     auth: {
                         persistSession: true,
                         autoRefreshToken: true,
@@ -1035,6 +1072,11 @@
         function isOwnerEmail(email) {
             if (!OWNER_EMAIL) return false;
             return String(email || '').trim().toLowerCase() === String(OWNER_EMAIL).trim().toLowerCase();
+        }
+
+        function getEffectiveRole(authEmail, profileRole) {
+            // Власник сайту завжди admin (для UI), навіть якщо в profiles ще не оновилось.
+            return isOwnerEmail(authEmail) ? 'admin' : (profileRole || 'student');
         }
 
         function isRecoveryFromUrl() {
@@ -1217,11 +1259,10 @@
             if (!authUser) return;
 
             let profile = await getMyProfile(authUser.id);
-            if (!profile) {
-                // ⚙️ За замовчуванням — student.
-                // Але OWNER_EMAIL отримує admin автоматично (одноразово при першому логіні).
-                const initialRole = isOwnerEmail(authUser.email) ? 'admin' : 'student';
 
+            // 1) Якщо профілю немає — створюємо (owner -> admin)
+            if (!profile) {
+                const initialRole = getEffectiveRole(authUser.email, 'student');
                 await upsertMyProfile({
                     full_name: authUser.user_metadata?.full_name || authUser.email,
                     role: initialRole,
@@ -1231,19 +1272,25 @@
 
                 profile = await getMyProfile(authUser.id);
             } else {
-                // Якщо це власник сайту — гарантуємо роль admin (на випадок, якщо створилось як student).
+                // 2) Якщо профіль є, але це власник і роль не admin — пробуємо підняти роль у profiles
                 if (isOwnerEmail(authUser.email) && profile.role !== 'admin') {
-                    await upsertMyProfile({
-                        full_name: profile.full_name || authUser.user_metadata?.full_name || authUser.email,
-                        role: 'admin',
-                        legacy_id: profile.legacy_id || null,
-                        can_add_students: !!profile.can_add_students
-                    }, authUser.id);
-                    profile = await getMyProfile(authUser.id);
+                    try {
+                        await upsertMyProfile({
+                            full_name: profile.full_name || authUser.user_metadata?.full_name || authUser.email,
+                            role: 'admin',
+                            legacy_id: profile.legacy_id || null,
+                            can_add_students: !!profile.can_add_students
+                        }, authUser.id);
+                        profile = await getMyProfile(authUser.id);
+                    } catch (e) {
+                        console.warn('Could not promote owner to admin in profiles (RLS?):', e);
+                        // Важливо: навіть якщо БД не дала оновити роль — для UI власник все одно admin.
+                    }
                 }
             }
 
             const legacyId = profile?.legacy_id || authUser.id;
+            const effectiveRole = getEffectiveRole(authUser.email, profile?.role);
 
             if (!appData.users[legacyId]) {
                 appData.users[legacyId] = {
@@ -1251,15 +1298,15 @@
                     name: profile?.full_name || authUser.email,
                     email: authUser.email,
                     password: '',
-                    role: profile?.role || 'student'
+                    role: effectiveRole
                 };
             }
 
             appData.users[legacyId].name = profile?.full_name || appData.users[legacyId].name || authUser.email;
             appData.users[legacyId].email = authUser.email;
-            appData.users[legacyId].role = profile?.role || appData.users[legacyId].role || 'student';
+            appData.users[legacyId].role = effectiveRole;
 
-            if (appData.users[legacyId].role === 'teacher') {
+            if (effectiveRole === 'teacher') {
                 if (!appData.users[legacyId].students) appData.users[legacyId].students = [];
                 appData.users[legacyId].canAddStudents = !!profile?.can_add_students;
             } else {
@@ -1269,6 +1316,15 @@
 
             currentUser = appData.users[legacyId];
             currentUser.authUserId = authUser.id;
+
+            // Debug log to confirm owner detection
+            console.log('[Auth]', {
+                email: authUser.email,
+                OWNER_EMAIL,
+                isOwner: isOwnerEmail(authUser.email),
+                profileRole: profile?.role,
+                effectiveRole
+            });
         }
 
         // ========================
@@ -2768,6 +2824,33 @@
                 else console.error(e?.message || e);
             } catch (_) {}
         });
+        window.addEventListener('unhandledrejection', (e) => {
+            try { console.error('Unhandled rejection:', e?.reason || e); } catch (_) {}
+        });
+
+        // Quick diagnostics helper (run in DevTools console: debugAuth())
+        window.debugAuth = async function debugAuth() {
+            const client = getSupabaseClient();
+            if (!client) {
+                console.log('Supabase is not configured/loaded');
+                return;
+            }
+            const { data: u } = await client.auth.getUser();
+            const email = u?.user?.email;
+            let profile = null;
+            try {
+                profile = u?.user?.id ? await getMyProfile(u.user.id) : null;
+            } catch (e) {
+                console.warn('getMyProfile failed:', e);
+            }
+            console.log({
+                OWNER_EMAIL,
+                email,
+                isOwner: isOwnerEmail(email),
+                profile,
+                currentUser
+            });
+        };
 
         // ========================
         //  INIT
@@ -2781,6 +2864,57 @@
                     if (err) err.innerHTML = '<div class="success-message">Пароль змінено ✅ Тепер увійдіть з новим паролем.</div>';
                 }
             } catch (_) {}
+
+            // Wire buttons/links (fallback even if inline handlers are blocked)
+            const loginBtn = document.getElementById('loginBtn');
+            if (loginBtn) loginBtn.addEventListener('click', () => login());
+            const regBtn = document.getElementById('registerBtn');
+            if (regBtn) regBtn.addEventListener('click', () => register());
+            const toReg = document.getElementById('toRegisterLink');
+            if (toReg) toReg.addEventListener('click', (e) => { e.preventDefault(); toggleAuth(); });
+            const toLogin = document.getElementById('toLoginLink');
+            if (toLogin) toLogin.addEventListener('click', (e) => { e.preventDefault(); toggleAuth(); });
+            const forgot = document.getElementById('forgotPwdLink');
+            if (forgot) forgot.addEventListener('click', (e) => { e.preventDefault(); openPasswordResetModal(false); });
+
+            // Supabase setup UI
+            const setup = document.getElementById('supabaseSetup');
+            const { url: cfgUrl, key: cfgKey } = getSupabaseConfig();
+            const sbUrl = document.getElementById('sbUrl');
+            const sbAnon = document.getElementById('sbAnon');
+            if (sbUrl) sbUrl.value = (cfgUrl && !cfgUrl.includes('PASTE_')) ? cfgUrl : '';
+            if (sbAnon) sbAnon.value = (cfgKey && !cfgKey.includes('PASTE_')) ? cfgKey : '';
+
+            const saveBtn = document.getElementById('saveSupabaseBtn');
+            const clearBtn = document.getElementById('clearSupabaseBtn');
+            if (saveBtn) {
+                saveBtn.addEventListener('click', () => {
+                    const u = (sbUrl?.value || '').trim();
+                    const k = (sbAnon?.value || '').trim();
+                    if (!u.startsWith('http') || !k.startsWith('ey')) {
+                        const err = document.getElementById('loginError');
+                        if (err) err.innerHTML = '<div class="error-message">Перевірте URL та anon key (мають починатися з https:// та ey...)</div>';
+                        return;
+                    }
+                    try {
+                        localStorage.setItem('sb_url', u);
+                        localStorage.setItem('sb_anon', k);
+                    } catch (_) {}
+                    location.reload();
+                });
+            }
+            if (clearBtn) {
+                clearBtn.addEventListener('click', () => {
+                    try {
+                        localStorage.removeItem('sb_url');
+                        localStorage.removeItem('sb_anon');
+                    } catch (_) {}
+                    location.reload();
+                });
+            }
+
+            // Show setup block when not configured
+            if (setup) setup.style.display = isSupabaseConfigured() ? 'none' : 'block';
 
             // initial renders so admin dashboard doesn't look empty in demo
             renderUsersList();
