@@ -137,8 +137,14 @@ Deno.serve(async (request) => {
     }
 
     if (action === "delete") {
+      if (userId === user.id) return response({ error: "The current administrator cannot delete their own account here" }, 400);
       const { error } = await adminClient.auth.admin.deleteUser(userId);
-      if (error) return response({ error: error.message }, 400);
+      if (error) {
+        if (error.message.toLowerCase().includes("database error deleting user")) {
+          return response({ error: "Account has learning or financial history. Suspend access instead." }, 400);
+        }
+        return response({ error: error.message }, 400);
+      }
       return response({ message: "Акаунт видалено." });
     }
 
