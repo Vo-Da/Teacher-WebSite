@@ -11,7 +11,7 @@
     school: null,
     data: emptyData(),
     activeView: "overview",
-    selectedDate: isoDate(new Date()),
+    selectedDate: dateInTimezone(new Date(), "Europe/Kyiv"),
     calendarOffset: 0,
     selectedLessonId: null,
     notice: null,
@@ -1159,7 +1159,11 @@
 
   function localDate(value) {
     if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
-    const parts = new Intl.DateTimeFormat("en-CA", { timeZone: state.school?.timezone || "Europe/Kyiv", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(value));
+    return dateInTimezone(value, state.school?.timezone || "Europe/Kyiv");
+  }
+
+  function dateInTimezone(value, timezone) {
+    const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(value));
     const find = (type) => parts.find((part) => part.type === type)?.value;
     return `${find("year")}-${find("month")}-${find("day")}`;
   }
