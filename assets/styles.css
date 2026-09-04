@@ -617,6 +617,10 @@ textarea:focus {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.auth-columns.single-column {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .school-shell {
   min-height: 100vh;
   padding-bottom: 38px;

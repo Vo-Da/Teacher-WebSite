@@ -9,6 +9,7 @@
     profile: null,
     membership: null,
     school: null,
+    canBootstrapSchool: false,
     data: emptyData(),
     activeView: "overview",
     selectedDate: dateInTimezone(new Date(), "Europe/Kyiv"),
@@ -73,6 +74,7 @@
     state.profile = null;
     state.membership = null;
     state.school = null;
+    state.canBootstrapSchool = false;
     state.data = emptyData();
     state.selectedLessonId = null;
 
@@ -97,12 +99,17 @@
       state.membership = (membershipResult.data || []).find((item) => item.status === "active") || null;
 
       if (!state.membership) {
-        const requestResult = await state.client
-          .from("registration_requests")
-          .select("id, requested_role, status, created_at")
-          .eq("user_id", userId)
-          .maybeSingle();
+        const [requestResult, bootstrapResult] = await Promise.all([
+          state.client
+            .from("registration_requests")
+            .select("id, requested_role, status, created_at")
+            .eq("user_id", userId)
+            .maybeSingle(),
+          state.client.rpc("can_bootstrap_school")
+        ]);
         if (requestResult.error && requestResult.error.code !== "PGRST116") throw requestResult.error;
+        if (bootstrapResult.error) throw bootstrapResult.error;
+        state.canBootstrapSchool = bootstrapResult.data === true;
         renderOnboarding(requestResult.data || null);
         return;
       }
@@ -220,20 +227,20 @@
             <h1>Заявка очікує підтвердження</h1>
             <p class="muted">Адміністратор має підтвердити роль: <strong>${request.requested_role === "teacher" ? "викладач" : "учень"}</strong>.</p>
           ` : `
-            <div class="auth-columns">
+            <div class="auth-columns ${state.canBootstrapSchool ? "" : "single-column"}">
               <form id="requestMembershipForm" class="stack card plain-card">
                 <h2>Приєднатися до школи</h2>
                 <div class="field"><label>Ім’я та прізвище</label><input name="fullName" value="${escapeAttr(state.profile?.full_name || "")}" required /></div>
                 <div class="field"><label>Роль</label><select name="requestedRole"><option value="student">Учень</option><option value="teacher">Викладач</option></select></div>
                 <button class="btn primary" type="submit">Надіслати заявку</button>
               </form>
-              <form id="bootstrapSchoolForm" class="stack card plain-card">
+              ${state.canBootstrapSchool ? `<form id="bootstrapSchoolForm" class="stack card plain-card">
                 <h2>Створити першу школу</h2>
                 <p class="muted">Це виконує лише перший власник нового Supabase-проєкту.</p>
                 <div class="field"><label>Назва школи</label><input name="schoolName" value="${escapeAttr(config.schoolName || "Моя школа")}" required /></div>
                 <div class="field"><label>Ім’я адміністратора</label><input name="fullName" value="${escapeAttr(state.profile?.full_name || "")}" required /></div>
                 <button class="btn secondary" type="submit">Створити школу та admin-доступ</button>
-              </form>
+              </form>` : ""}
             </div>
           `}
           <button class="btn small secondary" type="button" data-action="logout">Вийти</button>

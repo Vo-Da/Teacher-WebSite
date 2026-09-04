@@ -429,6 +429,16 @@ begin
 end;
 $$;
 
+-- This exposes only whether the first-school setup is still available.
+create or replace function public.can_bootstrap_school()
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select not exists (select 1 from public.schools)
+$$;
+
+grant execute on function public.can_bootstrap_school() to authenticated;
+
 -- Public registration creates only a pending request. It never grants a role.
 create or replace function public.request_membership(p_full_name text, p_requested_role public.app_role)
 returns void
