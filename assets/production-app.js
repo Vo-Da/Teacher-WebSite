@@ -327,7 +327,9 @@
         return;
       }
       if (action === "delete-user") {
-        if (!confirm("Видалити акаунт назавжди? Уроки та файли, пов’язані з ним, теж стануть недоступними.")) return;
+        const userName = target.dataset.userName || "цього користувача";
+        const message = `Ви впевнені, що хочете остаточно видалити ${userName}?\n\nБуде безповоротно видалено акаунт, його уроки, домашні завдання, файли та пов’язані фінансові записи. Цю дію неможливо скасувати.\n\nЩоб лише закрити доступ і зберегти історію, натисніть «Скасувати» та оберіть «Призупинити».`;
+        if (!confirm(message)) return;
         await manageAdminUser({ action: "delete", userId: target.dataset.userId });
         return;
       }
@@ -1144,7 +1146,7 @@
     return `<div class="list">${members.map((member) => {
       const isSelf = member.user_id === state.session.user.id;
       const roles = membershipRoles(member);
-      return `<div class="item"><div class="item-head"><div><p class="item-title">${escape(nameOf(member.user_id))}</p><div class="meta">${escape(isSelf ? "Цей акаунт" : "Активний доступ")}</div></div><div class="role-badges">${roleBadges(roles)}</div></div><form id="changeUserRolesForm" class="inline-form"><input type="hidden" name="userId" value="${member.user_id}" />${roleCheckboxes(roles)}<button class="btn small secondary" type="submit">Зберегти ролі</button>${isSelf ? "" : `<button class="btn small secondary" type="button" data-action="suspend-user" data-user-id="${member.user_id}">Призупинити</button><button class="btn small danger" type="button" data-action="delete-user" data-user-id="${member.user_id}">Видалити</button>`}</form></div>`;
+      return `<div class="item"><div class="item-head"><div><p class="item-title">${escape(nameOf(member.user_id))}</p><div class="meta">${escape(isSelf ? "Цей акаунт" : "Активний доступ")}</div></div><div class="role-badges">${roleBadges(roles)}</div></div><form id="changeUserRolesForm" class="inline-form"><input type="hidden" name="userId" value="${member.user_id}" />${roleCheckboxes(roles)}<button class="btn small secondary" type="submit">Зберегти ролі</button>${isSelf ? "" : `<button class="btn small secondary" type="button" data-action="suspend-user" data-user-id="${member.user_id}">Призупинити</button><button class="btn small danger" type="button" data-action="delete-user" data-user-id="${member.user_id}" data-user-name="${escapeAttr(nameOf(member.user_id))}">Видалити</button>`}</form></div>`;
     }).join("") || empty("Поки немає активних користувачів.")}</div>`;
   }
 
@@ -1304,6 +1306,8 @@
     if (text.includes("Password must contain")) return "Пароль має містити щонайменше 8 символів.";
     if (text.includes("Account has learning or financial history")) return "Цей акаунт уже має історію занять, матеріалів або оплат. Замість видалення призупини доступ, щоб зберегти дані.";
     if (text.includes("cannot delete their own account")) return "Власний акаунт не можна видалити з цього екрана.";
+    if (text.includes("Account belongs to another school")) return "Цей акаунт має доступ до іншої школи, тому його не можна видалити з цього кабінету.";
+    if (text.includes("Account owns another school")) return "Цей акаунт є власником іншої школи. Спершу передай там права власника.";
     if (text.includes("Select at least one role")) return "Вибери хоча б одну роль для користувача.";
     if (text.includes("At least one active administrator must remain")) return "У школі має залишитися щонайменше один активний адміністратор.";
     if (text.includes("Failed to send a request to the Edge Function")) return "Сервіс створення акаунтів ще не підключено. У Supabase відкрий Edge Functions, створи або задеплой функцію з назвою admin-users і повтори спробу.";

@@ -28,6 +28,48 @@ function preferredProfileRole(userRoles: string[]) {
   return userRoles.includes("teacher") ? "teacher" : userRoles.includes("student") ? "student" : "admin";
 }
 
+function uniqueIds(values: Array<string | null | undefined>) {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
+async function removeStoredFiles(
+  adminClient: ReturnType<typeof createClient>,
+  schoolId: string,
+  userId: string,
+  lessonIds: string[],
+  homeworkIds: string[],
+  homeworkStudentIds: string[],
+  submissionIds: string[]
+) {
+  const { data: attachments, error: attachmentsError } = await adminClient
+    .from("file_attachments")
+    .select("storage_path, uploaded_by, lesson_id, homework_id, homework_student_id, submission_id")
+    .eq("school_id", schoolId);
+  if (attachmentsError) throw new Error(attachmentsError.message);
+
+  const lessonIdSet = new Set(lessonIds);
+  const homeworkIdSet = new Set(homeworkIds);
+  const homeworkStudentIdSet = new Set(homeworkStudentIds);
+  const submissionIdSet = new Set(submissionIds);
+  const paths = uniqueIds((attachments || []).filter((attachment) =>
+    attachment.uploaded_by === userId ||
+    lessonIdSet.has(attachment.lesson_id) ||
+    homeworkIdSet.has(attachment.homework_id) ||
+    homeworkStudentIdSet.has(attachment.homework_student_id) ||
+    submissionIdSet.has(attachment.submission_id)
+  ).map((attachment) => attachment.storage_path));
+
+  for (let start = 0; start < paths.length; start += 100) {
+    const { error } = await adminClient.storage.from("portal-files").remove(paths.slice(start, start + 100));
+    if (error) throw new Error(error.message);
+  }
+
+  if (paths.length) {
+    const { error } = await adminClient.from("file_attachments").delete().in("storage_path", paths);
+    if (error) throw new Error(error.message);
+  }
+}
+
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (request.method !== "POST") return response({ error: "Method not allowed" }, 405);
@@ -138,14 +180,79 @@ Deno.serve(async (request) => {
 
     if (action === "delete") {
       if (userId === user.id) return response({ error: "The current administrator cannot delete their own account here" }, 400);
-      const { error } = await adminClient.auth.admin.deleteUser(userId);
-      if (error) {
-        if (error.message.toLowerCase().includes("database error deleting user")) {
-          return response({ error: "Account has learning or financial history. Suspend access instead." }, 400);
-        }
-        return response({ error: error.message }, 400);
+      const [otherMembershipsResult, ownedSchoolsResult, lessonsResult, teacherHomeworkResult, studentHomeworkResult, studentSubmissionsResult] = await Promise.all([
+        adminClient.from("school_memberships").select("school_id").eq("user_id", userId).neq("school_id", schoolId).limit(1),
+        adminClient.from("schools").select("id").eq("owner_id", userId),
+        adminClient.from("lessons").select("id").eq("school_id", schoolId).eq("teacher_id", userId),
+        adminClient.from("homework").select("id").eq("school_id", schoolId).eq("teacher_id", userId),
+        adminClient.from("homework_students").select("id").eq("student_id", userId),
+        adminClient.from("homework_submissions").select("id").eq("student_id", userId)
+      ]);
+      const initialError = [otherMembershipsResult, ownedSchoolsResult, lessonsResult, teacherHomeworkResult, studentHomeworkResult, studentSubmissionsResult]
+        .map((result) => result.error)
+        .find(Boolean);
+      if (initialError) return response({ error: initialError.message }, 400);
+      if ((otherMembershipsResult.data || []).length) {
+        return response({ error: "Account belongs to another school and cannot be deleted here" }, 400);
       }
-      return response({ message: "Акаунт видалено." });
+
+      const ownedSchoolIds = (ownedSchoolsResult.data || []).map((school) => school.id);
+      if (ownedSchoolIds.some((id) => id !== schoolId)) {
+        return response({ error: "Account owns another school and cannot be deleted here" }, 400);
+      }
+
+      const lessonIds = (lessonsResult.data || []).map((lesson) => lesson.id);
+      const homeworkIds = (teacherHomeworkResult.data || []).map((homework) => homework.id);
+      let teacherHomeworkStudents: Array<{ id: string }> = [];
+      let homeworkStudentSubmissions: Array<{ id: string }> = [];
+      if (homeworkIds.length) {
+        const { data, error } = await adminClient.from("homework_students").select("id").in("homework_id", homeworkIds);
+        if (error) return response({ error: error.message }, 400);
+        teacherHomeworkStudents = data || [];
+      }
+      const homeworkStudentIds = uniqueIds([
+        ...teacherHomeworkStudents.map((item) => item.id),
+        ...(studentHomeworkResult.data || []).map((item) => item.id)
+      ]);
+      if (homeworkStudentIds.length) {
+        const { data, error } = await adminClient.from("homework_submissions").select("id").in("homework_student_id", homeworkStudentIds);
+        if (error) return response({ error: error.message }, 400);
+        homeworkStudentSubmissions = data || [];
+      }
+      const submissionIds = uniqueIds([
+        ...homeworkStudentSubmissions.map((item) => item.id),
+        ...(studentSubmissionsResult.data || []).map((item) => item.id)
+      ]);
+
+      try {
+        await removeStoredFiles(adminClient, schoolId, userId, lessonIds, homeworkIds, homeworkStudentIds, submissionIds);
+
+        const { error: ledgerError } = await adminClient
+          .from("wallet_ledger")
+          .delete()
+          .eq("school_id", schoolId)
+          .or(`student_id.eq.${userId},teacher_id.eq.${userId},created_by.eq.${userId}`);
+        if (ledgerError) throw new Error(ledgerError.message);
+
+        if (homeworkIds.length) {
+          const { error } = await adminClient.from("homework").delete().in("id", homeworkIds);
+          if (error) throw new Error(error.message);
+        }
+        if (lessonIds.length) {
+          const { error } = await adminClient.from("lessons").delete().in("id", lessonIds);
+          if (error) throw new Error(error.message);
+        }
+        if (ownedSchoolIds.includes(schoolId)) {
+          const { error } = await adminClient.from("schools").update({ owner_id: user.id }).eq("id", schoolId);
+          if (error) throw new Error(error.message);
+        }
+
+        const { error } = await adminClient.auth.admin.deleteUser(userId);
+        if (error) throw new Error(error.message);
+      } catch (error) {
+        return response({ error: error instanceof Error ? error.message : "Could not delete account" }, 400);
+      }
+      return response({ message: "Акаунт і всі пов’язані дані видалено." });
     }
 
     return response({ error: "Unknown action" }, 400);
