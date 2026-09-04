@@ -687,8 +687,8 @@
         <div class="card"><h2>Новий предмет</h2><form id="createSubjectForm" class="stack"><div class="field"><label>Назва</label><input name="name" placeholder="Наприклад, Математика" required /></div><div class="field"><label>Колір у календарі</label><input name="color" type="color" value="#0f766e" /></div><div class="field"><label>Тривалість, хв</label><input name="duration" type="number" min="15" max="240" value="60" /></div><button class="btn primary" type="submit">Додати предмет</button></form></div>
         <div class="card"><h2>Новий тариф</h2><form id="createRateForm" class="stack">
           ${selectField("studentId", "Учень", students, true)}
-          ${selectField("teacherId", "Викладач", teachers, false, "Загальна ціна для учня")}
-          ${subjectSelect("subjectId", "Предмет", false, "Загальна ціна для учня")}
+          ${selectField("teacherId", "Викладач", teachers, false, "")}
+          ${subjectSelect("subjectId", "Предмет", false, "")}
           <div class="two-fields"><div class="field"><label>Ціна уроку, грн</label><input name="lessonPrice" type="number" min="0" step="1" required /></div><div class="field"><label>Виплата викладачу, грн</label><input name="teacherPayout" type="number" min="0" step="1" required /></div></div>
           <div class="field"><label>Діє з</label><input name="activeFrom" type="date" value="${isoDate(new Date())}" required /></div><button class="btn primary" type="submit">Зберегти тариф</button>
         </form></div>
@@ -1093,12 +1093,14 @@
       const id = record.user_id || record.id;
       return `<option value="${escapeAttr(id)}">${escape(nameOf(id))}</option>`;
     }).join("");
-    return `<div class="field"><label>${escape(label)}</label><select name="${escapeAttr(name)}" ${required ? "required" : ""} ${multiple ? "multiple size=\"4\"" : ""}>${emptyLabel ? `<option value="">${escape(emptyLabel)}</option>` : ""}${options}</select>${multiple ? '<div class="meta">Щоб вибрати кількох учнів, утримуй Ctrl або Cmd.</div>' : ""}</div>`;
+    const emptyOption = emptyLabel !== undefined ? `<option value="" selected hidden>${escape(emptyLabel)}</option>` : "";
+    return `<div class="field"><label>${escape(label)}</label><select name="${escapeAttr(name)}" ${required ? "required" : ""} ${multiple ? "multiple size=\"4\"" : ""}>${emptyOption}${options}</select>${multiple ? '<div class="meta">Щоб вибрати кількох учнів, утримуй Ctrl або Cmd.</div>' : ""}</div>`;
   }
 
   function subjectSelect(name, label, required, emptyLabel) {
     const options = state.data.subjects.filter((item) => item.is_active).map((item) => `<option value="${item.id}">${escape(item.name)}</option>`).join("");
-    return `<div class="field"><label>${escape(label)}</label><select name="${escapeAttr(name)}" ${required ? "required" : ""}>${emptyLabel ? `<option value="">${escape(emptyLabel)}</option>` : ""}${options}</select></div>`;
+    const emptyOption = emptyLabel !== undefined ? `<option value="" selected hidden>${escape(emptyLabel)}</option>` : "";
+    return `<div class="field"><label>${escape(label)}</label><select name="${escapeAttr(name)}" ${required ? "required" : ""}>${emptyOption}${options}</select></div>`;
   }
 
   function renderPeopleList(members) {
@@ -1220,6 +1222,7 @@
     if (text.includes("financial history cannot be deleted")) return "Урок уже має фінансову історію. Замість видалення зміни його статус на «Скасовано».";
     if (text.includes("Access denied")) return "Недостатньо прав для цієї дії.";
     if (text.includes("Email not confirmed")) return "Підтверди email, а потім увійди в кабінет.";
+    if (text.includes("Failed to send a request to the Edge Function")) return "Сервіс створення акаунтів ще не підключено. У Supabase відкрий Edge Functions, створи або задеплой функцію з назвою admin-users і повтори спробу.";
     return text;
   }
 
