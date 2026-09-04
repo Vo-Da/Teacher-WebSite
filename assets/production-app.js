@@ -1177,7 +1177,7 @@
     return { admin: "Адміністратор", teacher: "Викладач", student: "Учень" }[role] || role;
   }
 
-  function membershipRoles(member) {
+  function membershipRoles(member = state.membership) {
     const roles = member?.roles;
     return Array.isArray(roles) ? roles : [];
   }
