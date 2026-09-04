@@ -28,26 +28,25 @@ Deno.serve(async (request) => {
     if (!authorization) return response({ error: "Authentication required" }, 401);
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
-    const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-    if (!supabaseUrl || !anonKey || !serviceRoleKey) return response({ error: "Function environment is incomplete" }, 500);
+    if (!supabaseUrl || !serviceRoleKey) return response({ error: "Function environment is incomplete" }, 500);
 
-    const userClient = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authorization } } });
-    const { data: userData, error: userError } = await userClient.auth.getUser();
-    if (userError || !userData.user) return response({ error: "Authentication required" }, 401);
+    // Verify the caller's access token before using the privileged server client.
+    const adminClient = createClient(supabaseUrl, serviceRoleKey, { auth: { autoRefreshToken: false, persistSession: false } });
+    const accessToken = authorization.replace(/^Bearer\s+/i, "").trim();
+    const { data: { user }, error: userError } = await adminClient.auth.getUser(accessToken);
+    if (userError || !user) return response({ error: "Authentication required" }, 401);
 
     const body = await request.json();
     const schoolId = text(body.schoolId);
     const action = text(body.action);
     if (!schoolId || !action) return response({ error: "schoolId and action are required" }, 400);
 
-    // The service client is used only after the caller's active administrator role is verified.
-    const adminClient = createClient(supabaseUrl, serviceRoleKey, { auth: { autoRefreshToken: false, persistSession: false } });
     const { data: callerMembership, error: membershipError } = await adminClient
       .from("school_memberships")
       .select("id")
       .eq("school_id", schoolId)
-      .eq("user_id", userData.user.id)
+      .eq("user_id", user.id)
       .eq("role", "admin")
       .eq("status", "active")
       .maybeSingle();
@@ -80,7 +79,7 @@ Deno.serve(async (request) => {
         user_id: userId,
         role,
         status: "active",
-        approved_by: userData.user.id,
+        approved_by: user.id,
         approved_at: new Date().toISOString()
       });
       if (profileError || schoolError) {
@@ -93,7 +92,7 @@ Deno.serve(async (request) => {
 
     const userId = text(body.userId);
     if (!userId) return response({ error: "userId is required" }, 400);
-    if (userId === userData.user.id) return response({ error: "The current administrator cannot change or delete their own access here" }, 400);
+    if (userId === user.id) return response({ error: "The current administrator cannot change or delete their own access here" }, 400);
 
     const { data: target, error: targetError } = await adminClient
       .from("school_memberships")

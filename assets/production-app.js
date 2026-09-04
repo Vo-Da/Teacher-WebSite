@@ -585,7 +585,18 @@
     const { data, error } = await state.client.functions.invoke("admin-users", {
       body: { ...payload, schoolId: state.school.id }
     });
-    if (error) throw error;
+    if (error) {
+      let message = "";
+      try {
+        const response = error.context;
+        const body = response && typeof response.json === "function" ? await response.json() : null;
+        message = typeof body?.error === "string" ? body.error : "";
+      } catch (_) {
+        // The generic error remains a safe fallback when the server gives no JSON body.
+      }
+      if (message) throw new Error(message);
+      throw error;
+    }
     if (data?.error) throw new Error(data.error);
     state.notice = success(data?.message || "Зміни доступу збережено.");
     await refreshContext();
@@ -1222,6 +1233,9 @@
     if (text.includes("financial history cannot be deleted")) return "Урок уже має фінансову історію. Замість видалення зміни його статус на «Скасовано».";
     if (text.includes("Access denied")) return "Недостатньо прав для цієї дії.";
     if (text.includes("Email not confirmed")) return "Підтверди email, а потім увійди в кабінет.";
+    if (text.includes("Administrator access required")) return "Для цієї дії потрібен активний доступ адміністратора.";
+    if (text.includes("Invalid account data")) return "Перевір ім’я, email і пароль нового користувача.";
+    if (text.includes("Password must contain")) return "Пароль має містити щонайменше 8 символів.";
     if (text.includes("Failed to send a request to the Edge Function")) return "Сервіс створення акаунтів ще не підключено. У Supabase відкрий Edge Functions, створи або задеплой функцію з назвою admin-users і повтори спробу.";
     return text;
   }
