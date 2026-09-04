@@ -708,7 +708,7 @@
       </div>
       <div class="work-grid">
         <div class="card"><h2>Створити акаунт</h2><p class="muted">Новий користувач отримає активний доступ одразу. Для однієї людини можна вибрати кілька ролей.</p><form id="adminCreateUserForm" class="stack"><div class="field"><label>Ім’я та прізвище</label><input name="fullName" required /></div><div class="field"><label>Email</label><input name="email" type="email" required /></div><div class="field"><label>Тимчасовий пароль</label><input name="password" type="password" minlength="8" required /></div><div class="field"><label>Ролі</label>${roleCheckboxes(["student"])}</div><button class="btn primary" type="submit">Створити акаунт</button></form></div>
-        <div class="card"><h2>Доступи</h2><p class="muted">Призупинення зберігає історію, а видалення прибирає акаунт остаточно.</p><div class="list">${state.data.memberships.filter((member) => member.status === "suspended").map((member) => `<div class="item"><div><p class="item-title">${escape(nameOf(member.user_id))}</p><div class="meta">${escape(roleTitles(memberRoles(member)).join(", "))} · доступ призупинено</div></div><button class="btn small secondary" type="button" data-action="activate-user" data-user-id="${member.user_id}">Відновити</button></div>`).join("") || empty("Призупинених акаунтів немає.")}</div></div>
+        <div class="card"><h2>Доступи</h2><p class="muted">Призупинення зберігає історію, а видалення прибирає акаунт остаточно.</p><div class="list">${state.data.memberships.filter((member) => member.status === "suspended").map((member) => `<div class="item"><div><p class="item-title">${escape(nameOf(member.user_id))}</p><div class="meta">${escape(roleTitles(membershipRoles(member)).join(", "))} · доступ призупинено</div></div><button class="btn small secondary" type="button" data-action="activate-user" data-user-id="${member.user_id}">Відновити</button></div>`).join("") || empty("Призупинених акаунтів немає.")}</div></div>
       </div>
       <div class="card"><h2>Активні зв’язки</h2><div class="relation-list">${state.data.teacherStudents.map((relation) => `<div class="item"><strong>${escape(nameOf(relation.teacher_id))}</strong><span>викладає</span><strong>${escape(nameOf(relation.student_id))}</strong><button class="btn small secondary" type="button" data-action="remove-assignment" data-relation-id="${relation.id}">Прибрати</button></div>`).join("") || empty("Ще немає призначень.")}</div></div>
       <div class="work-grid"><div class="card"><h2>Викладачі</h2>${renderPeopleList(teachers)}</div><div class="card"><h2>Учні</h2>${renderPeopleList(students)}</div></div>
@@ -1032,7 +1032,7 @@
   }
 
   function activeMembers(role) {
-    return state.data.memberships.filter((member) => member.status === "active" && memberRoles(member).includes(role));
+    return state.data.memberships.filter((member) => member.status === "active" && membershipRoles(member).includes(role));
   }
 
   function teacherStudents() {
@@ -1143,7 +1143,7 @@
   function renderPeopleList(members) {
     return `<div class="list">${members.map((member) => {
       const isSelf = member.user_id === state.session.user.id;
-      const roles = memberRoles(member);
+      const roles = membershipRoles(member);
       return `<div class="item"><div class="item-head"><div><p class="item-title">${escape(nameOf(member.user_id))}</p><div class="meta">${escape(isSelf ? "Цей акаунт" : "Активний доступ")}</div></div><div class="role-badges">${roleBadges(roles)}</div></div><form id="changeUserRolesForm" class="inline-form"><input type="hidden" name="userId" value="${member.user_id}" />${roleCheckboxes(roles)}<button class="btn small secondary" type="submit">Зберегти ролі</button>${isSelf ? "" : `<button class="btn small secondary" type="button" data-action="suspend-user" data-user-id="${member.user_id}">Призупинити</button><button class="btn small danger" type="button" data-action="delete-user" data-user-id="${member.user_id}">Видалити</button>`}</form></div>`;
     }).join("") || empty("Поки немає активних користувачів.")}</div>`;
   }
