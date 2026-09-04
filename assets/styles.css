@@ -968,6 +968,16 @@ select[multiple] {
   font-weight: 500;
 }
 
+.empty-state {
+  padding: 16px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  background: #fbfdff;
+  text-align: center;
+  font-size: 14px;
+}
+
 body.is-loading {
   cursor: progress;
 }

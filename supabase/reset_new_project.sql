@@ -42,7 +42,8 @@ begin
         'prevent_financial_lesson_delete', 'prevent_direct_lesson_status_change',
         'set_lesson_status', 'approve_registration', 'request_membership',
         'bootstrap_school', 'register_file_attachment', 'can_access_file',
-        'is_lesson_student', 'is_lesson_teacher', 'is_school_admin', 'my_role'
+        'is_homework_recipient', 'is_lesson_student', 'is_lesson_teacher',
+        'is_school_admin', 'my_role'
       )
   loop
     execute 'drop function if exists ' || routine.signature::text || ' cascade';

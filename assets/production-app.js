@@ -1112,6 +1112,10 @@
     return `<article class="metric-card"><div class="metric-label">${escape(label)}</div><strong>${escape(String(number))}</strong><div class="meta">${escape(hint)}</div></article>`;
   }
 
+  function empty(message) {
+    return `<div class="empty-state">${escape(message)}</div>`;
+  }
+
   function statusBadge(status) {
     const labels = { planned: "Заплановано", completed: "Проведено", cancelled: "Скасовано", cancelled_paid: "Скасовано з оплатою" };
     return `<span class="status status-${escapeAttr(status)}">${escape(labels[status] || status)}</span>`;

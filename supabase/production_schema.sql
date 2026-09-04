@@ -235,6 +235,18 @@ as $$
   )
 $$;
 
+-- A security-definer helper avoids RLS policy recursion between homework and
+-- homework_students when a student loads their published assignments.
+create or replace function public.is_homework_recipient(p_homework_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1 from public.homework_students
+    where homework_id = p_homework_id and student_id = auth.uid()
+  )
+$$;
+
 alter table public.profiles enable row level security;
 alter table public.schools enable row level security;
 alter table public.school_memberships enable row level security;
@@ -299,7 +311,7 @@ alter policy "lessons_teacher_update" on public.lessons using (false) with check
 create policy "lesson_students_read_related" on public.lesson_students for select to authenticated using (student_id = auth.uid() or public.is_lesson_teacher(lesson_id) or exists (select 1 from public.lessons l where l.id = lesson_id and public.is_school_admin(l.school_id)));
 create policy "lesson_students_teacher_manage" on public.lesson_students for all to authenticated using (public.is_lesson_teacher(lesson_id) or exists (select 1 from public.lessons l where l.id = lesson_id and public.is_school_admin(l.school_id))) with check (public.is_lesson_teacher(lesson_id) or exists (select 1 from public.lessons l where l.id = lesson_id and public.is_school_admin(l.school_id)));
 
-create policy "homework_read_related" on public.homework for select to authenticated using (teacher_id = auth.uid() or public.is_school_admin(school_id) or (status = 'published' and exists (select 1 from public.homework_students hs where hs.homework_id = id and hs.student_id = auth.uid())));
+create policy "homework_read_related" on public.homework for select to authenticated using (teacher_id = auth.uid() or public.is_school_admin(school_id) or (status = 'published' and public.is_homework_recipient(id)));
 create policy "homework_teacher_manage" on public.homework for all to authenticated using (teacher_id = auth.uid() or public.is_school_admin(school_id)) with check (teacher_id = auth.uid() or public.is_school_admin(school_id));
 -- Publishing uses create_homework(), which validates every recipient before insert.
 alter policy "homework_teacher_manage" on public.homework using (false) with check (false);
