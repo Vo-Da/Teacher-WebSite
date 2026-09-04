@@ -9,6 +9,7 @@
     profile: null,
     membership: null,
     school: null,
+    activeRole: null,
     canBootstrapSchool: false,
     data: emptyData(),
     activeView: "overview",
@@ -79,6 +80,7 @@
     state.selectedLessonId = null;
 
     if (!state.session) {
+      state.activeRole = null;
       renderAuth();
       return;
     }
@@ -92,11 +94,12 @@
 
       const membershipResult = await state.client
         .from("school_memberships")
-        .select("id, school_id, role, status, schools(id, name, currency, timezone)")
+        .select("id, school_id, roles, status, schools(id, name, currency, timezone)")
         .eq("user_id", userId)
         .order("created_at", { ascending: true });
       if (membershipResult.error) throw membershipResult.error;
       state.membership = (membershipResult.data || []).find((item) => item.status === "active") || null;
+      if (state.membership && !membershipRoles().includes(state.activeRole)) state.activeRole = preferredRole();
 
       if (!state.membership) {
         const [requestResult, bootstrapResult] = await Promise.all([
@@ -126,14 +129,14 @@
 
   async function loadDashboardData() {
     const schoolId = state.membership.school_id;
-    const role = state.membership.role;
+    const canAdminister = hasRole("admin");
     const [subjects, relations, lessons, homework, profiles, memberships] = await Promise.all([
       selectRows("subjects", (q) => q.eq("school_id", schoolId).order("name")),
       selectRows("teacher_students", (q) => q.eq("school_id", schoolId).eq("is_active", true)),
       selectRows("lessons", (q) => q.eq("school_id", schoolId).order("starts_at")),
       selectRows("homework", (q) => q.eq("school_id", schoolId).order("created_at", { ascending: false })),
       selectRows("profiles", (q) => q.order("full_name")),
-      role === "admin" ? selectRows("school_memberships", (q) => q.eq("school_id", schoolId)) : Promise.resolve([])
+      canAdminister ? selectRows("school_memberships", (q) => q.eq("school_id", schoolId)) : Promise.resolve([])
     ]);
 
     state.data.subjects = subjects;
@@ -150,7 +153,7 @@
     state.data.submissions = await selectRowsIn("homework_submissions", "homework_student_id", state.data.homeworkStudents.map((item) => item.id));
     state.data.attachments = await selectRows("file_attachments", (q) => q.eq("school_id", schoolId).order("created_at", { ascending: false }));
 
-    if (role === "admin") {
+    if (canAdminister) {
       const [requests, rates, ledger] = await Promise.all([
         selectRows("registration_requests", (q) => q.eq("status", "pending").order("created_at")),
         selectRows("student_rates", (q) => q.eq("school_id", schoolId).order("active_from", { ascending: false })),
@@ -271,6 +274,14 @@
         renderDashboard();
         return;
       }
+      if (action === "set-role") {
+        const role = target.dataset.role;
+        if (!hasRole(role)) return;
+        state.activeRole = role;
+        state.activeView = defaultViewForRole(role);
+        renderDashboard();
+        return;
+      }
       if (action === "calendar-prev") {
         state.calendarOffset -= 1;
         renderDashboard();
@@ -368,7 +379,7 @@
       if (form.id === "submitHomeworkForm") await submitHomework(form);
       if (form.id === "feedbackForm") await sendFeedback(form);
       if (form.id === "adminCreateUserForm") await createAdminUser(form);
-      if (form.id === "changeUserRoleForm") await changeUserRole(form);
+      if (form.id === "changeUserRolesForm") await changeUserRoles(form);
     } catch (error) {
       state.notice = failure(friendlyError(error));
       renderCurrent();
@@ -575,17 +586,21 @@
   async function createAdminUser(form) {
     const password = value(form, "password");
     if (password.length < 8) throw new Error("Пароль має містити щонайменше 8 символів.");
+    const roles = values(form, "roles");
+    if (!roles.length) throw new Error("Вибери хоча б одну роль для нового користувача.");
     await manageAdminUser({
       action: "create",
       fullName: value(form, "fullName"),
       email: value(form, "email"),
       password,
-      role: value(form, "role")
+      roles
     });
   }
 
-  async function changeUserRole(form) {
-    await manageAdminUser({ action: "change_role", userId: value(form, "userId"), role: value(form, "role") });
+  async function changeUserRoles(form) {
+    const roles = values(form, "roles");
+    if (!roles.length) throw new Error("У користувача має залишитися хоча б одна роль.");
+    await manageAdminUser({ action: "set_roles", userId: value(form, "userId"), roles });
   }
 
   async function manageAdminUser(payload) {
@@ -610,20 +625,16 @@
   }
 
   function renderDashboard() {
-    const role = state.membership.role;
-    const navigation = role === "admin"
-      ? [["overview", "Огляд"], ["people", "Люди"], ["subjects", "Предмети і тарифи"], ["finance", "Фінанси"]]
-      : role === "teacher"
-        ? [["calendar", "Календар"], ["students", "Мої учні"], ["homework", "Домашні"], ["payments", "Оплати"]]
-        : [["today", "Сьогодні"], ["calendar", "Календар"], ["homework", "Домашні"]];
+    const role = state.activeRole || preferredRole();
+    const navigation = navigationForRole(role);
     if (!navigation.some(([view]) => view === state.activeView)) state.activeView = navigation[0][0];
 
     root.innerHTML = shell(`
       <section class="school-shell">
         <header class="school-header">
           <div class="container school-header-inner">
-            <div class="brand"><div class="brand-mark">TP</div><div><div class="brand-title">${escape(state.school.name)}</div><div class="brand-sub">${roleTitle(role)} • ${escape(state.profile?.full_name || state.session.user.email)}</div></div></div>
-            <button type="button" class="btn small secondary" data-action="logout">Вийти</button>
+            <div class="brand"><div class="brand-mark">TP</div><div><div class="brand-title">${escape(state.school.name)}</div><div class="brand-sub">${escape(modeTitle(role))} • ${escape(state.profile?.full_name || state.session.user.email)}</div></div></div>
+            <div class="header-actions">${renderModeSwitcher(role)}<button type="button" class="btn small secondary" data-action="logout">Вийти</button></div>
           </div>
         </header>
         <div class="container school-layout">
@@ -639,6 +650,14 @@
         </div>
       </section>
     `);
+  }
+
+  function navigationForRole(role) {
+    return role === "admin"
+      ? [["overview", "Огляд"], ["people", "Люди"], ["subjects", "Предмети і тарифи"], ["finance", "Фінанси"]]
+      : role === "teacher"
+        ? [["calendar", "Календар"], ["students", "Мої учні"], ["homework", "Домашні"], ["payments", "Оплати"]]
+        : [["today", "Сьогодні"], ["calendar", "Календар"], ["homework", "Домашні"]];
   }
 
   function renderAdminView() {
@@ -688,8 +707,8 @@
         </div>
       </div>
       <div class="work-grid">
-        <div class="card"><h2>Створити акаунт</h2><p class="muted">Новий користувач отримає активний доступ одразу. Адміністратора може створити лише чинний адміністратор.</p><form id="adminCreateUserForm" class="stack"><div class="field"><label>Ім’я та прізвище</label><input name="fullName" required /></div><div class="field"><label>Email</label><input name="email" type="email" required /></div><div class="field"><label>Тимчасовий пароль</label><input name="password" type="password" minlength="8" required /></div><div class="field"><label>Роль</label><select name="role"><option value="student">Учень</option><option value="teacher">Викладач</option><option value="admin">Адміністратор</option></select></div><button class="btn primary" type="submit">Створити акаунт</button></form></div>
-        <div class="card"><h2>Доступи</h2><p class="muted">Призупинення зберігає історію, а видалення прибирає акаунт остаточно.</p><div class="list">${state.data.memberships.filter((member) => member.status === "suspended").map((member) => `<div class="item"><div><p class="item-title">${escape(nameOf(member.user_id))}</p><div class="meta">${escape(roleTitle(member.role))} · доступ призупинено</div></div><button class="btn small secondary" type="button" data-action="activate-user" data-user-id="${member.user_id}">Відновити</button></div>`).join("") || empty("Призупинених акаунтів немає.")}</div></div>
+        <div class="card"><h2>Створити акаунт</h2><p class="muted">Новий користувач отримає активний доступ одразу. Для однієї людини можна вибрати кілька ролей.</p><form id="adminCreateUserForm" class="stack"><div class="field"><label>Ім’я та прізвище</label><input name="fullName" required /></div><div class="field"><label>Email</label><input name="email" type="email" required /></div><div class="field"><label>Тимчасовий пароль</label><input name="password" type="password" minlength="8" required /></div><div class="field"><label>Ролі</label>${roleCheckboxes(["student"])}</div><button class="btn primary" type="submit">Створити акаунт</button></form></div>
+        <div class="card"><h2>Доступи</h2><p class="muted">Призупинення зберігає історію, а видалення прибирає акаунт остаточно.</p><div class="list">${state.data.memberships.filter((member) => member.status === "suspended").map((member) => `<div class="item"><div><p class="item-title">${escape(nameOf(member.user_id))}</p><div class="meta">${escape(roleTitles(memberRoles(member)).join(", "))} · доступ призупинено</div></div><button class="btn small secondary" type="button" data-action="activate-user" data-user-id="${member.user_id}">Відновити</button></div>`).join("") || empty("Призупинених акаунтів немає.")}</div></div>
       </div>
       <div class="card"><h2>Активні зв’язки</h2><div class="relation-list">${state.data.teacherStudents.map((relation) => `<div class="item"><strong>${escape(nameOf(relation.teacher_id))}</strong><span>викладає</span><strong>${escape(nameOf(relation.student_id))}</strong><button class="btn small secondary" type="button" data-action="remove-assignment" data-relation-id="${relation.id}">Прибрати</button></div>`).join("") || empty("Ще немає призначень.")}</div></div>
       <div class="work-grid"><div class="card"><h2>Викладачі</h2>${renderPeopleList(teachers)}</div><div class="card"><h2>Учні</h2>${renderPeopleList(students)}</div></div>
@@ -1003,7 +1022,7 @@
   }
 
   function values(form, name) {
-    return Array.from(form.querySelectorAll(`[name="${name}"] option:checked`)).map((option) => option.value).filter(Boolean);
+    return Array.from(form.querySelectorAll(`[name="${name}"] option:checked, input[name="${name}"]:checked`)).map((option) => option.value).filter(Boolean);
   }
 
   function wholeUah(raw) {
@@ -1013,7 +1032,7 @@
   }
 
   function activeMembers(role) {
-    return state.data.memberships.filter((member) => member.status === "active" && member.role === role);
+    return state.data.memberships.filter((member) => member.status === "active" && memberRoles(member).includes(role));
   }
 
   function teacherStudents() {
@@ -1124,7 +1143,8 @@
   function renderPeopleList(members) {
     return `<div class="list">${members.map((member) => {
       const isSelf = member.user_id === state.session.user.id;
-      return `<div class="item"><div class="item-head"><div><p class="item-title">${escape(nameOf(member.user_id))}</p><div class="meta">${escape(isSelf ? "Цей акаунт" : "Активний доступ")}</div></div><span class="role-badge role-${member.role}">${escape(roleTitle(member.role))}</span></div>${isSelf ? "" : `<form id="changeUserRoleForm" class="inline-form"><input type="hidden" name="userId" value="${member.user_id}" /><select name="role"><option value="student" ${member.role === "student" ? "selected" : ""}>Учень</option><option value="teacher" ${member.role === "teacher" ? "selected" : ""}>Викладач</option><option value="admin" ${member.role === "admin" ? "selected" : ""}>Адміністратор</option></select><button class="btn small secondary" type="submit">Змінити роль</button><button class="btn small secondary" type="button" data-action="suspend-user" data-user-id="${member.user_id}">Призупинити</button><button class="btn small danger" type="button" data-action="delete-user" data-user-id="${member.user_id}">Видалити</button></form>`}</div>`;
+      const roles = memberRoles(member);
+      return `<div class="item"><div class="item-head"><div><p class="item-title">${escape(nameOf(member.user_id))}</p><div class="meta">${escape(isSelf ? "Цей акаунт" : "Активний доступ")}</div></div><div class="role-badges">${roleBadges(roles)}</div></div><form id="changeUserRolesForm" class="inline-form"><input type="hidden" name="userId" value="${member.user_id}" />${roleCheckboxes(roles)}<button class="btn small secondary" type="submit">Зберегти ролі</button>${isSelf ? "" : `<button class="btn small secondary" type="button" data-action="suspend-user" data-user-id="${member.user_id}">Призупинити</button><button class="btn small danger" type="button" data-action="delete-user" data-user-id="${member.user_id}">Видалити</button>`}</form></div>`;
     }).join("") || empty("Поки немає активних користувачів.")}</div>`;
   }
 
@@ -1155,6 +1175,45 @@
 
   function roleTitle(role) {
     return { admin: "Адміністратор", teacher: "Викладач", student: "Учень" }[role] || role;
+  }
+
+  function membershipRoles(member) {
+    const roles = member?.roles;
+    return Array.isArray(roles) ? roles : [];
+  }
+
+  function hasRole(role) {
+    return membershipRoles().includes(role);
+  }
+
+  function preferredRole() {
+    return ["admin", "teacher", "student"].find((role) => hasRole(role)) || "student";
+  }
+
+  function defaultViewForRole(role) {
+    return navigationForRole(role)[0][0];
+  }
+
+  function modeTitle(role) {
+    return { admin: "Адміністрування", teacher: "Викладання", student: "Навчання" }[role] || roleTitle(role);
+  }
+
+  function roleTitles(roles) {
+    return roles.map(roleTitle);
+  }
+
+  function roleBadges(roles) {
+    return roles.map((role) => `<span class="role-badge role-${escapeAttr(role)}">${escape(roleTitle(role))}</span>`).join("");
+  }
+
+  function roleCheckboxes(selectedRoles) {
+    return `<div class="role-options">${["admin", "teacher", "student"].map((role) => `<label class="role-option"><input type="checkbox" name="roles" value="${role}" ${selectedRoles.includes(role) ? "checked" : ""} /><span>${escape(roleTitle(role))}</span></label>`).join("")}</div>`;
+  }
+
+  function renderModeSwitcher(activeRole) {
+    const roles = membershipRoles();
+    if (roles.length < 2) return "";
+    return `<div class="mode-switch" aria-label="Режим роботи">${roles.map((role) => `<button type="button" class="mode-switch-item ${role === activeRole ? "active" : ""}" data-action="set-role" data-role="${escapeAttr(role)}">${escape(modeTitle(role))}</button>`).join("")}</div>`;
   }
 
   function ledgerLabel(kind) {
@@ -1243,6 +1302,8 @@
     if (text.includes("Administrator access required")) return "Для цієї дії потрібен активний доступ адміністратора.";
     if (text.includes("Invalid account data")) return "Перевір ім’я, email і пароль нового користувача.";
     if (text.includes("Password must contain")) return "Пароль має містити щонайменше 8 символів.";
+    if (text.includes("Select at least one role")) return "Вибери хоча б одну роль для користувача.";
+    if (text.includes("At least one active administrator must remain")) return "У школі має залишитися щонайменше один активний адміністратор.";
     if (text.includes("Failed to send a request to the Edge Function")) return "Сервіс створення акаунтів ще не підключено. У Supabase відкрий Edge Functions, створи або задеплой функцію з назвою admin-users і повтори спробу.";
     return text;
   }

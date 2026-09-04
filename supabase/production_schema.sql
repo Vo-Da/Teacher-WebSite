@@ -33,13 +33,37 @@ create table public.school_memberships (
   id uuid primary key default gen_random_uuid(),
   school_id uuid not null references public.schools(id) on delete cascade,
   user_id uuid not null references auth.users(id) on delete cascade,
+  -- Kept as a compatibility primary role; permissions use roles below.
   role public.app_role not null,
+  roles public.app_role[] not null check (cardinality(roles) > 0),
   status public.membership_status not null default 'pending',
   approved_by uuid references auth.users(id) on delete set null,
   approved_at timestamptz,
   created_at timestamptz not null default now(),
   unique (school_id, user_id)
 );
+
+create or replace function public.sync_membership_roles()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if new.roles is null or cardinality(new.roles) = 0 then
+    new.roles := array[new.role];
+  end if;
+  new.role := case
+    when 'admin' = any(new.roles) then 'admin'::public.app_role
+    when 'teacher' = any(new.roles) then 'teacher'::public.app_role
+    else 'student'::public.app_role
+  end;
+  return new;
+end;
+$$;
+
+create trigger school_memberships_sync_roles
+before insert or update of role, roles on public.school_memberships
+for each row execute function public.sync_membership_roles();
 
 create table public.registration_requests (
   id uuid primary key default gen_random_uuid(),
@@ -209,15 +233,38 @@ create or replace function public.my_role(p_school_id uuid)
 returns public.app_role
 language sql stable security definer set search_path = public
 as $$
-  select role from public.school_memberships
+  select roles[1] from public.school_memberships
   where school_id = p_school_id and user_id = auth.uid() and status = 'active'
   limit 1
+$$;
+
+create or replace function public.is_school_member(p_school_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1 from public.school_memberships
+    where school_id = p_school_id and user_id = auth.uid() and status = 'active'
+  )
+$$;
+
+create or replace function public.has_school_role(p_school_id uuid, p_role public.app_role)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1 from public.school_memberships
+    where school_id = p_school_id
+      and user_id = auth.uid()
+      and status = 'active'
+      and p_role = any(roles)
+  )
 $$;
 
 create or replace function public.is_school_admin(p_school_id uuid)
 returns boolean
 language sql stable security definer set search_path = public
-as $$ select public.my_role(p_school_id) = 'admin' $$;
+as $$ select public.has_school_role(p_school_id, 'admin') $$;
 
 create or replace function public.is_lesson_teacher(p_lesson_id uuid)
 returns boolean
@@ -279,16 +326,16 @@ create policy "profiles_read_own_or_related" on public.profiles for select to au
 );
 create policy "profiles_update_own" on public.profiles for update to authenticated using (id = auth.uid()) with check (id = auth.uid());
 
-create policy "schools_read_member" on public.schools for select to authenticated using (public.my_role(id) is not null);
+create policy "schools_read_member" on public.schools for select to authenticated using (public.is_school_member(id));
 create policy "schools_update_admin" on public.schools for update to authenticated using (public.is_school_admin(id));
 
 create policy "memberships_read_member" on public.school_memberships for select to authenticated using (user_id = auth.uid() or public.is_school_admin(school_id));
 create policy "memberships_admin_manage" on public.school_memberships for all to authenticated using (public.is_school_admin(school_id)) with check (public.is_school_admin(school_id));
 
 create policy "registration_request_read_own" on public.registration_requests for select to authenticated using (user_id = auth.uid());
-create policy "registration_request_admin_read" on public.registration_requests for select to authenticated using (exists (select 1 from public.school_memberships sm where sm.user_id = auth.uid() and sm.role = 'admin' and sm.status = 'active'));
+create policy "registration_request_admin_read" on public.registration_requests for select to authenticated using (exists (select 1 from public.schools s where public.is_school_admin(s.id)));
 
-create policy "subjects_read_member" on public.subjects for select to authenticated using (public.my_role(school_id) is not null);
+create policy "subjects_read_member" on public.subjects for select to authenticated using (public.is_school_member(school_id));
 create policy "subjects_admin_manage" on public.subjects for all to authenticated using (public.is_school_admin(school_id)) with check (public.is_school_admin(school_id));
 
 create policy "teacher_students_read_related" on public.teacher_students for select to authenticated using (teacher_id = auth.uid() or student_id = auth.uid() or public.is_school_admin(school_id));
@@ -299,7 +346,7 @@ create policy "rates_admin_only" on public.student_rates for all to authenticate
 create policy "lessons_read_related" on public.lessons for select to authenticated using (
   teacher_id = auth.uid() or public.is_school_admin(school_id) or public.is_lesson_student(id)
 );
-create policy "lessons_teacher_create" on public.lessons for insert to authenticated with check (teacher_id = auth.uid() and public.my_role(school_id) = 'teacher');
+create policy "lessons_teacher_create" on public.lessons for insert to authenticated with check (teacher_id = auth.uid() and public.has_school_role(school_id, 'teacher'));
 create policy "lessons_teacher_update" on public.lessons for update to authenticated using (teacher_id = auth.uid() or public.is_school_admin(school_id)) with check (teacher_id = auth.uid() or public.is_school_admin(school_id));
 create policy "lessons_teacher_delete" on public.lessons for delete to authenticated using (teacher_id = auth.uid() or public.is_school_admin(school_id));
 
@@ -423,8 +470,8 @@ begin
   on conflict (id) do update set full_name = excluded.full_name, requested_role = 'admin', updated_at = now();
 
   insert into public.schools (name, owner_id) values (trim(p_school_name), auth.uid()) returning id into v_school_id;
-  insert into public.school_memberships (school_id, user_id, role, status, approved_by, approved_at)
-  values (v_school_id, auth.uid(), 'admin', 'active', auth.uid(), now());
+  insert into public.school_memberships (school_id, user_id, roles, status, approved_by, approved_at)
+  values (v_school_id, auth.uid(), array['admin']::public.app_role[], 'active', auth.uid(), now());
   return v_school_id;
 end;
 $$;
@@ -470,9 +517,9 @@ begin
   select * into v_request from public.registration_requests where id = p_request_id and status = 'pending' for update;
   if not found then raise exception 'Pending request not found'; end if;
 
-  insert into public.school_memberships (school_id, user_id, role, status, approved_by, approved_at)
-  values (p_school_id, v_request.user_id, v_request.requested_role, 'active', auth.uid(), now())
-  on conflict (school_id, user_id) do update set role = excluded.role, status = 'active', approved_by = auth.uid(), approved_at = now();
+  insert into public.school_memberships (school_id, user_id, roles, status, approved_by, approved_at)
+  values (p_school_id, v_request.user_id, array[v_request.requested_role], 'active', auth.uid(), now())
+  on conflict (school_id, user_id) do update set roles = excluded.roles, status = 'active', approved_by = auth.uid(), approved_at = now();
 
   update public.registration_requests set status = 'active', decided_by = auth.uid(), decided_at = now() where id = p_request_id;
 end;
@@ -566,7 +613,7 @@ declare
   v_student_id uuid;
   v_rate public.student_rates;
 begin
-  if auth.uid() is null or public.my_role(p_school_id) <> 'teacher' then raise exception 'Teacher access required'; end if;
+  if auth.uid() is null or not public.has_school_role(p_school_id, 'teacher') then raise exception 'Teacher access required'; end if;
   if p_ends_at <= p_starts_at then raise exception 'End must be after start'; end if;
   if coalesce(array_length(p_student_ids, 1), 0) = 0 then raise exception 'At least one student is required'; end if;
   if char_length(trim(p_title)) < 2 then raise exception 'Lesson title is required'; end if;
@@ -630,7 +677,7 @@ declare
   v_lesson public.lessons;
   v_recipients uuid[];
 begin
-  if auth.uid() is null or public.my_role(p_school_id) <> 'teacher' then raise exception 'Teacher access required'; end if;
+  if auth.uid() is null or not public.has_school_role(p_school_id, 'teacher') then raise exception 'Teacher access required'; end if;
   if char_length(trim(p_title)) < 2 then raise exception 'Homework title is required'; end if;
 
   if p_lesson_id is not null then

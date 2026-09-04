@@ -647,6 +647,43 @@ textarea:focus {
   margin: 0;
 }
 
+.header-actions,
+.mode-switch,
+.role-badges,
+.role-options {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.header-actions {
+  justify-content: flex-end;
+}
+
+.mode-switch {
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.mode-switch-item {
+  border: 0;
+  border-radius: 7px;
+  padding: 6px 9px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.mode-switch-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 .school-layout {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
@@ -923,6 +960,25 @@ select[multiple] {
   padding: 7px 9px;
 }
 
+.role-options {
+  flex-wrap: wrap;
+}
+
+.role-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.role-option input {
+  width: auto;
+  margin: 0;
+}
+
 .amount-positive {
   color: #167341;
 }
@@ -1019,6 +1075,15 @@ body.is-loading {
 @media (max-width: 560px) {
   .school-header-inner {
     min-height: 68px;
+  }
+
+  .header-actions {
+    gap: 5px;
+  }
+
+  .mode-switch-item {
+    padding: 5px 7px;
+    font-size: 11px;
   }
 
   .school-header .brand-mark {
