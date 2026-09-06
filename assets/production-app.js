@@ -24,6 +24,7 @@
 
   document.addEventListener("click", handleClick);
   document.addEventListener("submit", handleSubmit);
+  document.addEventListener("change", handleChange);
 
   void initialize();
 
@@ -395,6 +396,16 @@
       state.notice = failure(friendlyError(error));
       renderCurrent();
     }
+  }
+
+  function handleChange(event) {
+    const startInput = event.target;
+    if (startInput.name !== "startsAt" || startInput.form?.id !== "createLessonForm" || !startInput.value) return;
+    const endInput = startInput.form.elements.endsAt;
+    const start = new Date(startInput.value);
+    if (!endInput || Number.isNaN(start.getTime())) return;
+    start.setHours(start.getHours() + 1);
+    endInput.value = dateTimeInputValue(start);
   }
 
   async function handleSubmit(event) {
@@ -1473,6 +1484,11 @@
 
   function dateTimeLocal(date, time) {
     return `${date}T${time}`;
+  }
+
+  function dateTimeInputValue(value) {
+    const pad = (part) => String(part).padStart(2, "0");
+    return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}T${pad(value.getHours())}:${pad(value.getMinutes())}`;
   }
 
   function formatDate(value) {
