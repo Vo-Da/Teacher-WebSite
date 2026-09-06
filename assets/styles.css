@@ -601,7 +601,8 @@ textarea:focus {
 }
 
 .wide-card {
-  width: min(960px, 94vw);
+  width: min(880px, 94vw);
+  padding: 20px;
 }
 
 .plain-card {
@@ -619,6 +620,31 @@ textarea:focus {
 .auth-columns,
 .work-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.auth-columns {
+  align-items: start;
+}
+
+.auth-columns .plain-card {
+  padding: 18px;
+}
+
+.auth-columns .stack {
+  gap: 10px;
+}
+
+.auth-columns .field {
+  gap: 5px;
+}
+
+.auth-columns input,
+.auth-columns select {
+  padding: 9px 10px;
+}
+
+.auth-columns .btn:not(.small) {
+  padding: 10px 12px;
 }
 
 .auth-columns.single-column {
