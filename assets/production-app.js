@@ -355,6 +355,13 @@
         clearMediaRecording(target);
         return;
       }
+      if (action === "reset-student-statistics") {
+        const statistics = target.closest(".student-statistics");
+        if (!statistics) return;
+        statistics.querySelectorAll("[data-student-stat-range]").forEach((input) => { input.value = ""; });
+        refreshStudentStatistics(statistics);
+        return;
+      }
       if (action === "approve-request") {
         await approveRequest(target.dataset.requestId);
         return;
@@ -401,11 +408,9 @@
 
   function handleChange(event) {
     const input = event.target;
-    if (input.matches?.("[data-student-stat-period]")) {
+    if (input.matches?.("[data-student-stat-range]")) {
       const statistics = input.closest(".student-statistics");
-      statistics?.querySelectorAll("[data-student-stats-panel]").forEach((panel) => {
-        panel.hidden = panel.dataset.studentStatsPanel !== input.value;
-      });
+      refreshStudentStatistics(statistics);
       return;
     }
     if (input.name !== "startsAt" || input.form?.id !== "createLessonForm" || !input.value) return;
@@ -1469,13 +1474,25 @@
   }
 
   function renderStudentStatistics(studentId) {
-    const periods = studentStatisticsPeriods();
     return `
-      <section class="student-statistics">
-        <div class="student-stats-head"><div><h3>Статистика учня</h3><p class="muted">Заняття й рух коштів за обраний період.</p></div><label class="student-stats-period">Період<select data-student-stat-period>${periods.map((period) => `<option value="${period.id}">${escape(period.label)}</option>`).join("")}</select></label></div>
-        ${periods.map((period, index) => renderStudentStatisticsPanel(studentId, period, index !== 0)).join("")}
+      <section class="student-statistics" data-student-id="${escapeAttr(studentId)}">
+        <div class="student-stats-head"><div><h3>Статистика учня</h3><p class="muted">За замовчуванням показано всю історію.</p></div><div class="student-stats-range"><label>Від<input type="date" data-student-stat-range="from" /></label><label>До<input type="date" data-student-stat-range="to" /></label><button class="btn small secondary" type="button" data-action="reset-student-statistics">За весь час</button></div></div>
+        <div data-student-stats-results>${renderStudentStatisticsPanel(studentId, { id: "all", start: null, end: null })}</div>
       </section>
     `;
+  }
+
+  function refreshStudentStatistics(statistics) {
+    if (!statistics) return;
+    const studentId = statistics.dataset.studentId;
+    const start = statistics.querySelector('[data-student-stat-range="from"]')?.value || null;
+    const end = statistics.querySelector('[data-student-stat-range="to"]')?.value || null;
+    const results = statistics.querySelector("[data-student-stats-results]");
+    if (start && end && start > end) {
+      if (results) results.innerHTML = '<div class="msg error">Дата «Від» не може бути пізнішою за дату «До».</div>';
+      return;
+    }
+    if (results) results.innerHTML = renderStudentStatisticsPanel(studentId, { id: start || end ? "range" : "all", start, end });
   }
 
   function renderStudentStatisticsPanel(studentId, period, hidden) {
@@ -1488,7 +1505,7 @@
       ["Скасовано з оплатою", statistics.cancelledPaid]
     ];
     return `
-      <div class="student-stats-panel" data-student-stats-panel="${period.id}" ${hidden ? "hidden" : ""}>
+      <div class="student-stats-panel" ${hidden ? "hidden" : ""}>
         <div class="student-stats-grid">${lessonMetrics.map(([label, amount]) => studentStatisticMetric(label, amount)).join("")}</div>
         ${state.activeRole === "admin" ? `<div class="student-finance"><h4>Фінанси</h4><div class="student-stats-grid finance-grid">${studentStatisticMetric("Поповнення", money(statistics.paid))}${studentStatisticMetric("Списано", money(statistics.spent))}${studentStatisticMetric(period.id === "all" ? "Поточний баланс" : "Різниця за період", money(statistics.balance))}</div></div>` : `<p class="student-finance-note">Фінансові показники доступні лише адміністратору.</p>`}
       </div>
@@ -1518,21 +1535,6 @@
       spent: ledger.filter((row) => row.amount_uah < 0).reduce((sum, row) => sum + Math.abs(row.amount_uah), 0),
       balance: ledger.reduce((sum, row) => sum + row.amount_uah, 0)
     };
-  }
-
-  function studentStatisticsPeriods() {
-    const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1, 12);
-    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 12);
-    const threeMonthsStart = new Date(now.getFullYear(), now.getMonth() - 2, 1, 12);
-    const yearStart = new Date(now.getFullYear(), 0, 1, 12);
-    const yearEnd = new Date(now.getFullYear(), 11, 31, 12);
-    return [
-      { id: "all", label: "За весь час", start: null, end: null },
-      { id: "month", label: "Цей місяць", start: isoDate(monthStart), end: isoDate(monthEnd) },
-      { id: "three-months", label: "Останні 3 місяці", start: isoDate(threeMonthsStart), end: isoDate(monthEnd) },
-      { id: "year", label: "Цей рік", start: isoDate(yearStart), end: isoDate(yearEnd) }
-    ];
   }
 
   function metricCard(label, number, hint) {

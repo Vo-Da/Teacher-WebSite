@@ -698,16 +698,22 @@ textarea:focus {
   margin: 4px 0 0;
 }
 
-.student-stats-period {
+.student-stats-range {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.student-stats-range label {
   display: grid;
   gap: 5px;
-  min-width: 180px;
   color: var(--muted);
   font-size: 13px;
   font-weight: 700;
 }
 
-.student-stats-period select {
+.student-stats-range input {
   padding: 8px 10px;
 }
 
@@ -1299,8 +1305,14 @@ body.is-loading {
     flex-direction: column;
   }
 
-  .student-stats-period {
-    min-width: 0;
+  .student-stats-range {
+    align-items: stretch;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .student-stats-range .btn {
+    grid-column: 1 / -1;
   }
 
   .metric-card {
