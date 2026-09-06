@@ -351,6 +351,10 @@
         stopMediaRecording(target.dataset.captureId);
         return;
       }
+      if (action === "clear-media-recording") {
+        clearMediaRecording(target);
+        return;
+      }
       if (action === "approve-request") {
         await approveRequest(target.dataset.requestId);
         return;
@@ -378,14 +382,6 @@
         await downloadAttachment(target.dataset.fileId);
         return;
       }
-      if (action === "upload-lesson-files") {
-        const form = target.closest("form");
-        if (!form) return;
-        await uploadInputFiles(form, { lesson_id: target.dataset.lessonId });
-        state.notice = success("Матеріали до заняття завантажено.");
-        await refreshContext();
-        return;
-      }
       if (action === "mark-homework-reviewed") {
         await updateHomeworkStudent(target.dataset.homeworkStudentId, { status: "reviewed", reviewed_at: new Date().toISOString() });
         return;
@@ -404,10 +400,17 @@
   }
 
   function handleChange(event) {
-    const startInput = event.target;
-    if (startInput.name !== "startsAt" || startInput.form?.id !== "createLessonForm" || !startInput.value) return;
-    const endInput = startInput.form.elements.endsAt;
-    const start = new Date(startInput.value);
+    const input = event.target;
+    if (input.matches?.("[data-student-stat-period]")) {
+      const statistics = input.closest(".student-statistics");
+      statistics?.querySelectorAll("[data-student-stats-panel]").forEach((panel) => {
+        panel.hidden = panel.dataset.studentStatsPanel !== input.value;
+      });
+      return;
+    }
+    if (input.name !== "startsAt" || input.form?.id !== "createLessonForm" || !input.value) return;
+    const endInput = input.form.elements.endsAt;
+    const start = new Date(input.value);
     if (!endInput || Number.isNaN(start.getTime())) return;
     start.setHours(start.getHours() + 1);
     endInput.value = dateTimeInputValue(start);
@@ -970,7 +973,7 @@
         <form id="lessonCardForm" class="stack" style="margin-top:12px;"><input type="hidden" name="lessonId" value="${lesson.id}" />
           <div class="field"><label>Статус</label><select name="status">${lessonStatusOptions(lesson.status)}</select></div>
           <div class="field"><label>Нотатки викладача</label><textarea name="teacherNote" placeholder="Що пройшли, що повторити наступного разу">${escape(lesson.teacher_note || "")}</textarea></div>
-          <div class="filebox stack"><strong>Домашнє до цього уроку <span class="field-optional">(необов’язково)</span></strong><div class="field"><label>Назва</label><input name="homeworkTitle" /></div><div class="field"><label>Опис</label><textarea name="homeworkDescription"></textarea></div><div class="field"><label>Дедлайн</label><input name="homeworkDeadline" type="datetime-local" /></div>${renderVoiceCapture(`homework-${lesson.id}`, "Голосова інструкція")}<div class="field"><label>Файли до домашнього</label><input name="homeworkFiles" type="file" multiple accept="${supportedFileAccept()}" /></div></div>
+          <div class="filebox stack"><strong>Домашнє до цього уроку <span class="field-optional">(необов’язково)</span></strong><div class="field"><label>Назва</label><input name="homeworkTitle" /></div><div class="field"><label>Опис</label><textarea name="homeworkDescription"></textarea></div><div class="field"><label>Дедлайн</label><input name="homeworkDeadline" type="datetime-local" /></div>${renderVoiceCapture(`homework-${lesson.id}`, "Голосова інструкція")}${renderVideoCapture(`homework-video-${lesson.id}`, "Відеоінструкція")}<div class="field"><label>Файли до домашнього</label><input name="homeworkFiles" type="file" multiple accept="${supportedFileAccept()}" /></div></div>
           <div class="filebox stack"><strong>Матеріали до уроку <span class="field-optional">(необов’язково)</span></strong><input name="lessonFiles" type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.docx" /></div>
           <button class="btn primary" type="submit">Зберегти картку заняття</button>
         </form>
@@ -986,7 +989,7 @@
         <div class="field"><label>Пов’язати із заняттям</label><select name="lessonId"><option value="">Без прив’язки</option>${state.data.lessons.filter((lesson) => lesson.teacher_id === state.session.user.id).map((lesson) => `<option value="${lesson.id}" ${selected?.id === lesson.id ? "selected" : ""}>${escape(homeworkLessonLabel(lesson))}</option>`).join("")}</select></div>
         <div class="field"><label>Назва</label><input name="title" required /></div><div class="field"><label>Опис</label><textarea name="description"></textarea></div><div class="field"><label>Дедлайн</label><input name="deadline" type="datetime-local" /></div>
         ${selected ? "" : selectField("studentIds", "Учні", students.map((student) => ({ user_id: student.id })), true, null, true)}
-        ${renderVoiceCapture(`homework-${selected?.id || "new"}`, "Голосова інструкція")}
+        ${renderVoiceCapture(`homework-${selected?.id || "new"}`, "Голосова інструкція")}${renderVideoCapture(`homework-video-${selected?.id || "new"}`, "Відеоінструкція")}
         <div class="field"><label>Вкладення</label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn primary" type="submit">Опублікувати</button>
       </form>
     `;
@@ -996,7 +999,7 @@
     const rows = tasks.flatMap((task) => homeworkStudents(task.id).map((recipient) => ({ task, recipient }))).filter((row) => row.recipient.status !== "not_started");
     return `<div class="list">${rows.length ? rows.map(({ task, recipient }) => {
       const submissions = submissionsFor(recipient.id);
-      return `<div class="item"><p class="item-title">${escape(homeworkReviewLabel(task, recipient))}</p><div class="meta">Завдання: ${escape(task.title)} · статус: ${submissionLabel(recipient.status)}${recipient.grade ? " · оцінка: " + escape(recipient.grade) : ""}</div>${submissions.map((submission) => `<div class="filebox"><div>${escape(submission.body || "Файли без тексту")}</div>${renderAttachments({ submission_id: submission.id })}</div>`).join("")}${recipient.teacher_comment ? `<div class="meta">Мій коментар: ${escape(recipient.teacher_comment)}</div>` : ""}<form id="feedbackForm" class="stack" style="margin-top:8px;"><input type="hidden" name="homeworkStudentId" value="${recipient.id}" /><div class="two-fields"><div class="field"><label>Статус</label><select name="status"><option value="reviewed">Перевірено</option><option value="needs_revision">На доопрацювання</option></select></div><div class="field"><label>Оцінка</label><input name="grade" placeholder="Наприклад, 11/12" value="${escapeAttr(recipient.grade || "")}" /></div></div><div class="field"><label>Коментар</label><textarea name="comment">${escape(recipient.teacher_comment || "")}</textarea></div><div class="field"><label>Виправлений файл</label><input name="files" type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.docx" /></div><button class="btn small secondary" type="submit">Надіслати зворотний зв’язок</button></form></div>`;
+      return `<div class="item"><p class="item-title">${escape(homeworkReviewLabel(task, recipient))}</p><div class="meta">Завдання: ${escape(task.title)} · статус: ${submissionLabel(recipient.status)}${recipient.grade ? " · оцінка: " + escape(recipient.grade) : ""}</div>${submissions.map((submission) => `<div class="filebox"><div>${escape(submission.body || "Файли без тексту")}</div>${renderAttachments({ submission_id: submission.id })}</div>`).join("")}${recipient.teacher_comment ? `<div class="meta">Мій коментар: ${escape(recipient.teacher_comment)}</div>` : ""}<form id="feedbackForm" class="stack" style="margin-top:8px;"><input type="hidden" name="homeworkStudentId" value="${recipient.id}" /><div class="two-fields"><div class="field"><label>Статус</label><select name="status"><option value="reviewed">Перевірено</option><option value="needs_revision">На доопрацювання</option></select></div><div class="field"><label>Оцінка</label><input name="grade" placeholder="Наприклад, 11/12" value="${escapeAttr(recipient.grade || "")}" /></div></div><div class="field"><label>Коментар</label><textarea name="comment">${escape(recipient.teacher_comment || "")}</textarea></div>${renderVoiceCapture(`feedback-${recipient.id}`, "Голосовий коментар")}${renderVideoCapture(`feedback-video-${recipient.id}`, "Відеокоментар")}<div class="field"><label>Виправлений файл</label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn small secondary" type="submit">Надіслати зворотний зв’язок</button></form></div>`;
     }).join("") : empty("Надісланих робіт ще немає.")}</div>`;
   }
 
@@ -1005,7 +1008,7 @@
     if (!task) return "";
     const submissions = submissionsFor(recipient.id);
     return `
-      <article class="card homework-card"><div class="item-head"><div><p class="eyebrow">${task.deadline_at ? "Дедлайн: " + escape(formatDateTime(task.deadline_at)) : "Без дедлайну"}</p><h2>${escape(task.title)}</h2></div>${submissionBadge(recipient.status)}</div><p>${escape(task.description || "Без опису")}</p>${renderAttachments({ homework_id: task.id })}${recipient.teacher_comment ? `<div class="feedback-box"><strong>Коментар викладача</strong><div>${escape(recipient.teacher_comment)}</div>${recipient.grade ? `<div>Оцінка: ${escape(recipient.grade)}</div>` : ""}${renderAttachments({ homework_student_id: recipient.id })}</div>` : ""}${submissions.length ? `<div class="filebox"><strong>Мої відповіді</strong>${submissions.map((submission) => `<div class="meta">${escape(formatDateTime(submission.submitted_at))}: ${escape(submission.body || "Файли")}${renderAttachments({ submission_id: submission.id })}</div>`).join("")}</div>` : ""}<form id="submitHomeworkForm" class="stack" style="margin-top:12px;"><input type="hidden" name="homeworkStudentId" value="${recipient.id}" /><div class="field"><label>Моя відповідь</label><textarea name="body" placeholder="Опиши розв’язання або додай посилання"></textarea></div>${renderVoiceCapture(`submission-${recipient.id}`, "Голосова відповідь")}<div class="field"><label>Файли відповіді</label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn primary" type="submit">Надіслати відповідь</button></form></article>
+      <article class="card homework-card"><div class="item-head"><div><p class="eyebrow">${task.deadline_at ? "Дедлайн: " + escape(formatDateTime(task.deadline_at)) : "Без дедлайну"}</p><h2>${escape(task.title)}</h2></div>${submissionBadge(recipient.status)}</div><p>${escape(task.description || "Без опису")}</p>${renderAttachments({ homework_id: task.id })}${recipient.teacher_comment ? `<div class="feedback-box"><strong>Коментар викладача</strong><div>${escape(recipient.teacher_comment)}</div>${recipient.grade ? `<div>Оцінка: ${escape(recipient.grade)}</div>` : ""}${renderAttachments({ homework_student_id: recipient.id })}</div>` : ""}${submissions.length ? `<div class="filebox"><strong>Мої відповіді</strong>${submissions.map((submission) => `<div class="meta">${escape(formatDateTime(submission.submitted_at))}: ${escape(submission.body || "Файли")}${renderAttachments({ submission_id: submission.id })}</div>`).join("")}</div>` : ""}<form id="submitHomeworkForm" class="stack" style="margin-top:12px;"><input type="hidden" name="homeworkStudentId" value="${recipient.id}" /><div class="field"><label>Моя відповідь</label><textarea name="body" placeholder="Опиши розв’язання або додай посилання"></textarea></div>${renderVoiceCapture(`submission-${recipient.id}`, "Голосова відповідь")}${renderVideoCapture(`submission-video-${recipient.id}`, "Відеовідповідь")}<div class="field"><label>Файли відповіді</label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn primary" type="submit">Надіслати відповідь</button></form></article>
     `;
   }
 
@@ -1061,32 +1064,49 @@
   }
 
   function renderVoiceCapture(captureId, label) {
+    return renderMediaCapture(captureId, label, "audio");
+  }
+
+  function renderVideoCapture(captureId, label) {
+    return renderMediaCapture(captureId, label, "video");
+  }
+
+  function renderMediaCapture(captureId, label, kind) {
+    const isVideo = kind === "video";
+    const accept = isVideo ? "video/webm,video/mp4" : "audio/webm,audio/ogg,audio/mp4,audio/mpeg";
+    const helper = isVideo
+      ? "Запиши коротке відео в браузері. Файл додасться до форми після зупинки запису."
+      : "Запиши відповідь у браузері: аудіофайл додасться до форми після зупинки запису.";
     return `
-      <div class="media-capture" data-media-capture="${escapeAttr(captureId)}">
-        <div><strong>${escape(label)}</strong><div class="meta">Запиши відповідь у браузері: аудіофайл додасться до форми після зупинки запису.</div></div>
-        <input type="file" hidden data-recorded-media="${escapeAttr(captureId)}" accept="audio/webm,audio/ogg,audio/mp4,audio/mpeg" />
-        <div class="media-capture-actions"><button class="btn small secondary" type="button" data-action="start-media-recording" data-capture-id="${escapeAttr(captureId)}">Почати запис</button><button class="btn small danger" type="button" data-action="stop-media-recording" data-capture-id="${escapeAttr(captureId)}" disabled>Зупинити</button></div>
+      <div class="media-capture" data-media-capture="${escapeAttr(captureId)}" data-capture-kind="${kind}">
+        <div><strong>${escape(label)}</strong><div class="meta">${helper}</div></div>
+        <input type="file" hidden data-recorded-media="${escapeAttr(captureId)}" accept="${accept}" />
+        <div class="media-capture-actions"><button class="btn small secondary" type="button" data-action="start-media-recording" data-capture-id="${escapeAttr(captureId)}">Почати запис</button><button class="btn small danger" type="button" data-action="stop-media-recording" data-capture-id="${escapeAttr(captureId)}" disabled>Зупинити</button><button class="btn small secondary" type="button" data-action="clear-media-recording" disabled>Видалити запис</button></div>
+        <div class="media-preview" data-capture-preview></div>
         <div class="meta" data-capture-status>Запис ще не додано.</div>
       </div>
     `;
   }
 
   function supportedFileAccept() {
-    return ".pdf,.jpg,.jpeg,.png,.webp,.docx,.webm,.ogg,.mp3,.m4a";
+    return ".pdf,.jpg,.jpeg,.png,.webp,.docx,.webm,.ogg,.mp3,.m4a,.mp4";
   }
 
   async function startMediaRecording(trigger) {
     const captureId = trigger.dataset.captureId;
     const capture = trigger.closest("[data-media-capture]");
-    if (!capture || !captureId) throw new Error("Не вдалося підготувати запис голосу.");
+    if (!capture || !captureId) throw new Error("Не вдалося підготувати запис.");
     if (state.recording) throw new Error("Спершу зупини поточний запис голосу.");
-    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) throw new Error("Цей браузер не підтримує запис голосу. Додай аудіофайл вручну.");
+    const kind = capture.dataset.captureKind || "audio";
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) throw new Error("Цей браузер не підтримує запис. Додай файл вручну.");
 
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const stream = await navigator.mediaDevices.getUserMedia(kind === "video" ? { audio: true, video: true } : { audio: true });
+    clearMediaRecording(capture, false);
     const recorder = new MediaRecorder(stream);
     const chunks = [];
     const status = capture.querySelector("[data-capture-status]");
     const stopButton = capture.querySelector('[data-action="stop-media-recording"]');
+    const clearButton = capture.querySelector('[data-action="clear-media-recording"]');
     const input = capture.querySelector("input[data-recorded-media]");
     recorder.addEventListener("dataavailable", (event) => {
       if (event.data.size) chunks.push(event.data);
@@ -1095,34 +1115,74 @@
       stream.getTracks().forEach((track) => track.stop());
       state.recording = null;
       trigger.disabled = false;
+      trigger.textContent = "Почати запис";
       if (stopButton) stopButton.disabled = true;
+      if (clearButton) clearButton.disabled = true;
       if (status) status.textContent = "Не вдалося завершити запис. Спробуй ще раз або додай файл вручну.";
     });
     recorder.addEventListener("stop", () => {
       stream.getTracks().forEach((track) => track.stop());
-      const mimeType = recorder.mimeType || "audio/webm";
-      const extension = mimeType.includes("ogg") ? "ogg" : mimeType.includes("mpeg") ? "mp3" : mimeType.includes("mp4") ? "m4a" : "webm";
-      const recordingFile = new File(chunks, `voice-message-${Date.now()}.${extension}`, { type: mimeType });
+      const mimeType = recorder.mimeType || (kind === "video" ? "video/webm" : "audio/webm");
+      const extension = mimeType.includes("ogg") ? "ogg" : mimeType.includes("mpeg") ? "mp3" : mimeType.includes("mp4") ? (kind === "video" ? "mp4" : "m4a") : "webm";
+      const recordingFile = new File(chunks, `${kind}-message-${Date.now()}.${extension}`, { type: mimeType });
       if (input) {
         const transfer = new DataTransfer();
         transfer.items.add(recordingFile);
         input.files = transfer.files;
       }
+      setMediaPreview(capture, recordingFile);
       state.recording = null;
       trigger.disabled = false;
+      trigger.textContent = "Перезаписати";
       if (stopButton) stopButton.disabled = true;
+      if (clearButton) clearButton.disabled = false;
       if (status) status.textContent = `Запис додано: ${recordingFile.name} (${formatBytes(recordingFile.size)}). Він завантажиться після надсилання форми.`;
     });
     state.recording = { captureId, recorder, stream };
     trigger.disabled = true;
+    trigger.textContent = "Йде запис...";
     if (stopButton) stopButton.disabled = false;
-    if (status) status.textContent = "Йде запис голосу...";
+    if (clearButton) clearButton.disabled = true;
+    if (status) status.textContent = kind === "video" ? "Йде запис відео..." : "Йде запис голосу...";
     recorder.start();
   }
 
   function stopMediaRecording(captureId) {
     if (!state.recording || state.recording.captureId !== captureId) return;
     if (state.recording.recorder.state !== "inactive") state.recording.recorder.stop();
+  }
+
+  function clearMediaRecording(triggerOrCapture, announce = true) {
+    const capture = triggerOrCapture?.matches?.("[data-media-capture]") ? triggerOrCapture : triggerOrCapture?.closest?.("[data-media-capture]");
+    if (!capture) return;
+    const input = capture.querySelector("input[data-recorded-media]");
+    const preview = capture.querySelector("[data-capture-preview]");
+    const status = capture.querySelector("[data-capture-status]");
+    const startButton = capture.querySelector('[data-action="start-media-recording"]');
+    const clearButton = capture.querySelector('[data-action="clear-media-recording"]');
+    if (preview?.dataset.objectUrl) URL.revokeObjectURL(preview.dataset.objectUrl);
+    if (preview) {
+      preview.innerHTML = "";
+      delete preview.dataset.objectUrl;
+    }
+    if (input) input.value = "";
+    if (startButton && !state.recording) {
+      startButton.disabled = false;
+      startButton.textContent = "Почати запис";
+    }
+    if (clearButton) clearButton.disabled = true;
+    if (status) status.textContent = announce ? "Запис видалено. Можна записати новий." : "Запис ще не додано.";
+  }
+
+  function setMediaPreview(capture, file) {
+    const preview = capture.querySelector("[data-capture-preview]");
+    if (!preview) return;
+    if (preview.dataset.objectUrl) URL.revokeObjectURL(preview.dataset.objectUrl);
+    const objectUrl = URL.createObjectURL(file);
+    preview.dataset.objectUrl = objectUrl;
+    const element = capture.dataset.captureKind === "video" ? "video" : "audio";
+    const fallback = element === "video" ? "Ваш браузер не підтримує відтворення відео." : "Ваш браузер не підтримує відтворення аудіо.";
+    preview.innerHTML = `<${element} controls preload="metadata" src="${escapeAttr(objectUrl)}">${fallback}</${element}>`;
   }
 
   function hasSelectedFiles(form, selector = 'input[type="file"]') {
@@ -1143,12 +1203,14 @@
       "audio/ogg",
       "audio/mp4",
       "audio/mpeg",
-      "audio/x-m4a"
+      "audio/x-m4a",
+      "video/webm",
+      "video/mp4"
     ]);
 
     for (const file of files) {
       const extension = file.name.split(".").pop()?.toLowerCase();
-      const allowedExtension = ["pdf", "jpg", "jpeg", "png", "webp", "docx", "webm", "ogg", "mp3", "m4a"].includes(extension);
+      const allowedExtension = ["pdf", "jpg", "jpeg", "png", "webp", "docx", "webm", "ogg", "mp3", "m4a", "mp4"].includes(extension);
       if (file.size > 50 * 1024 * 1024) throw new Error(`Файл «${file.name}» перевищує ліміт 50 МБ.`);
       if (!allowedExtension || (file.type && !allowed.has(file.type))) throw new Error(`Формат файлу «${file.name}» не підтримується.`);
 
@@ -1192,7 +1254,8 @@
       webm: "audio/webm",
       ogg: "audio/ogg",
       mp3: "audio/mpeg",
-      m4a: "audio/mp4"
+      m4a: "audio/mp4",
+      mp4: "video/mp4"
     };
     return mimeTypes[extension] || "application/octet-stream";
   }
@@ -1400,8 +1463,76 @@
           </div>
           <button class="btn primary" type="submit">Зберегти картку та нотатку</button>
         </form>
+        ${renderStudentStatistics(studentId)}
       </section>
     `;
+  }
+
+  function renderStudentStatistics(studentId) {
+    const periods = studentStatisticsPeriods();
+    return `
+      <section class="student-statistics">
+        <div class="student-stats-head"><div><h3>Статистика учня</h3><p class="muted">Заняття й рух коштів за обраний період.</p></div><label class="student-stats-period">Період<select data-student-stat-period>${periods.map((period) => `<option value="${period.id}">${escape(period.label)}</option>`).join("")}</select></label></div>
+        ${periods.map((period, index) => renderStudentStatisticsPanel(studentId, period, index !== 0)).join("")}
+      </section>
+    `;
+  }
+
+  function renderStudentStatisticsPanel(studentId, period, hidden) {
+    const statistics = studentStatisticsForPeriod(studentId, period);
+    const lessonMetrics = [
+      ["Усього", statistics.total],
+      ["Заплановано", statistics.planned],
+      ["Проведено", statistics.completed],
+      ["Скасовано", statistics.cancelled],
+      ["Скасовано з оплатою", statistics.cancelledPaid]
+    ];
+    return `
+      <div class="student-stats-panel" data-student-stats-panel="${period.id}" ${hidden ? "hidden" : ""}>
+        <div class="student-stats-grid">${lessonMetrics.map(([label, amount]) => studentStatisticMetric(label, amount)).join("")}</div>
+        ${state.activeRole === "admin" ? `<div class="student-finance"><h4>Фінанси</h4><div class="student-stats-grid finance-grid">${studentStatisticMetric("Поповнення", money(statistics.paid))}${studentStatisticMetric("Списано", money(statistics.spent))}${studentStatisticMetric(period.id === "all" ? "Поточний баланс" : "Різниця за період", money(statistics.balance))}</div></div>` : `<p class="student-finance-note">Фінансові показники доступні лише адміністратору.</p>`}
+      </div>
+    `;
+  }
+
+  function studentStatisticMetric(label, amount) {
+    return `<div class="student-statistic-metric"><span>${escape(label)}</span><strong>${escape(String(amount))}</strong></div>`;
+  }
+
+  function studentStatisticsForPeriod(studentId, period) {
+    const isInPeriod = (value) => {
+      const date = localDate(value);
+      return (!period.start || date >= period.start) && (!period.end || date <= period.end);
+    };
+    const lessons = state.data.lessons.filter((lesson) => isInPeriod(lesson.starts_at) && lessonStudents(lesson.id).some((item) => item.student_id === studentId));
+    const ledger = state.activeRole === "admin"
+      ? state.data.ledger.filter((row) => row.student_id === studentId && row.status === "confirmed" && isInPeriod(row.created_at))
+      : [];
+    return {
+      total: lessons.length,
+      planned: lessons.filter((lesson) => lesson.status === "planned").length,
+      completed: lessons.filter((lesson) => lesson.status === "completed").length,
+      cancelled: lessons.filter((lesson) => lesson.status === "cancelled").length,
+      cancelledPaid: lessons.filter((lesson) => lesson.status === "cancelled_paid").length,
+      paid: ledger.filter((row) => row.amount_uah > 0).reduce((sum, row) => sum + row.amount_uah, 0),
+      spent: ledger.filter((row) => row.amount_uah < 0).reduce((sum, row) => sum + Math.abs(row.amount_uah), 0),
+      balance: ledger.reduce((sum, row) => sum + row.amount_uah, 0)
+    };
+  }
+
+  function studentStatisticsPeriods() {
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1, 12);
+    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 12);
+    const threeMonthsStart = new Date(now.getFullYear(), now.getMonth() - 2, 1, 12);
+    const yearStart = new Date(now.getFullYear(), 0, 1, 12);
+    const yearEnd = new Date(now.getFullYear(), 11, 31, 12);
+    return [
+      { id: "all", label: "За весь час", start: null, end: null },
+      { id: "month", label: "Цей місяць", start: isoDate(monthStart), end: isoDate(monthEnd) },
+      { id: "three-months", label: "Останні 3 місяці", start: isoDate(threeMonthsStart), end: isoDate(monthEnd) },
+      { id: "year", label: "Цей рік", start: isoDate(yearStart), end: isoDate(yearEnd) }
+    ];
   }
 
   function metricCard(label, number, hint) {
