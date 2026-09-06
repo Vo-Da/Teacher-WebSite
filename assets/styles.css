@@ -657,8 +657,12 @@ textarea:focus {
 }
 
 .auth-login-mark {
-  width: 156px;
-  height: 156px;
+  width: 196px;
+  height: 196px;
+}
+
+.auth-login-mark img {
+  filter: contrast(1.06) saturate(1.04);
 }
 
 .auth-columns.single-column {
@@ -1183,8 +1187,8 @@ body.is-loading {
   }
 
   .auth-login-mark {
-    width: 128px;
-    height: 128px;
+    width: 158px;
+    height: 158px;
   }
 
   .metric-grid,
