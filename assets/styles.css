@@ -78,43 +78,18 @@ a {
 }
 
 .brand-mark {
-  width: 44px;
-  height: 44px;
-  border-radius: 11px;
+  width: 54px;
+  height: 54px;
+  flex: 0 0 auto;
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, var(--accent), var(--accent-2));
-  color: white;
-  font-size: 19px;
-  box-shadow: 0 10px 26px rgba(15, 118, 110, 0.26);
 }
 
-.horse-mark svg {
-  width: 36px;
-  height: 36px;
-  overflow: visible;
-}
-
-.academy-shield {
-  fill: none;
-  stroke: rgba(255, 255, 255, 0.96);
-  stroke-linejoin: round;
-  stroke-width: 3.4;
-}
-
-.academy-horse {
-  fill: #fffdf6;
-}
-
-.academy-book {
-  fill: #e4b652;
-}
-
-.academy-book-line {
-  fill: none;
-  stroke: #0f766e;
-  stroke-linecap: round;
-  stroke-width: 1.6;
+.horse-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .brand-title {
@@ -675,6 +650,17 @@ textarea:focus {
   padding: 10px 12px;
 }
 
+.auth-login-emblem {
+  display: grid;
+  place-items: center;
+  margin: 2px 0 0;
+}
+
+.auth-login-mark {
+  width: 156px;
+  height: 156px;
+}
+
 .auth-columns.single-column {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -1192,9 +1178,13 @@ body.is-loading {
   }
 
   .school-header .brand-mark {
-    width: 36px;
-    height: 36px;
-    font-size: 15px;
+    width: 44px;
+    height: 44px;
+  }
+
+  .auth-login-mark {
+    width: 128px;
+    height: 128px;
   }
 
   .metric-grid,

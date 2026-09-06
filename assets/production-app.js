@@ -222,6 +222,7 @@
           ${renderNotice()}
           <div class="auth-columns">
             <form id="loginForm" class="stack card plain-card">
+              <div class="auth-login-emblem">${brandMark("auth-login-mark")}</div>
               <h2>Вхід</h2>
               <div class="field"><label>Email</label><input name="email" type="email" required autocomplete="email" /></div>
               <div class="field"><label>Пароль</label><input name="password" type="password" required autocomplete="current-password" /></div>
@@ -274,8 +275,8 @@
     root.innerHTML = shell(`<section class="auth-shell"><div class="auth-card"><h1>Потрібна увага</h1><div class="msg error">${escape(message)}</div></div></section>`);
   }
 
-  function brandMark() {
-    return `<div class="brand-mark horse-mark" role="img" aria-label="Емблема школи: кінь у стрибку та відкрита книга"><svg viewBox="0 0 64 64" aria-hidden="true"><path class="academy-shield" d="M10 8 32 3 54 8v21c0 15-9 25-22 32C19 54 10 44 10 29Z"/><path class="academy-horse" d="M12 31c4-5 10-7 16-5l6-3 3-8 3 4 5-2-2 5c5-1 8 2 7 5-1 3-5 4-8 2l-4 4c-4 4-10 5-15 2l-6 10-5-2 4-10-5-2z"/><path class="academy-horse" d="m37 33 10 6 6-2 2 3-8 4-11-6zm-12 3-5 9-5 3-2-3 4-5 3-8z"/><path class="academy-book" d="M17 51c5-2 10-1 14 2v7c-4-3-9-4-14-2zm30 0c-5-2-10-1-14 2v7c4-3 9-4 14-2z"/><path class="academy-book-line" d="M32 53v7"/></svg></div>`;
+  function brandMark(variant = "") {
+    return `<div class="brand-mark horse-mark ${variant}" role="img" aria-label="Емблема школи: кінь у стрибку та відкрита книга"><img src="./assets/academy-crest.png" alt="" /></div>`;
   }
 
   function shell(content) {
