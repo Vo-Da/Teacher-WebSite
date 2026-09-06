@@ -645,7 +645,7 @@
 
   async function saveStudentInternalProfile(form) {
     const studentId = value(form, "studentId");
-    if (!studentId) throw new Error("Обери учня для педагогічної картки.");
+    if (!studentId) throw new Error("Обери учня для картки учня.");
     const { error } = await state.client.from("student_internal_profiles").upsert({
       school_id: state.school.id,
       student_id: studentId,
@@ -878,7 +878,7 @@
       <div class="card"><div class="list">${students.map((student) => {
         const upcoming = state.data.lessons.filter((lesson) => lesson.teacher_id === state.session.user.id && lessonStudents(lesson.id).some((row) => row.student_id === student.id) && new Date(lesson.starts_at) >= new Date()).sort((a, b) => a.starts_at.localeCompare(b.starts_at))[0];
         const submitted = teacherHomeworkStudents().filter((row) => row.student_id === student.id && row.status === "submitted").length;
-        return `<div class="item"><div class="item-head"><div><p class="item-title">${escape(student.full_name)}</p><div class="meta">Наступний урок: ${upcoming ? escape(formatDateTime(upcoming.starts_at)) + " · " + escape(subjectName(upcoming.subject_id)) : "не заплановано"}</div><div class="meta">Робіт на перевірці: ${submitted}</div></div><div class="item-actions"><span class="role-badge role-student">Учень</span><button class="btn small secondary" type="button" data-action="open-student-card" data-student-id="${student.id}">Педагогічна картка</button></div></div></div>`;
+        return `<div class="item"><div class="item-head"><div><p class="item-title">${escape(student.full_name)}</p><div class="meta">Наступний урок: ${upcoming ? escape(formatDateTime(upcoming.starts_at)) + " · " + escape(subjectName(upcoming.subject_id)) : "не заплановано"}</div><div class="meta">Робіт на перевірці: ${submitted}</div></div><div class="item-actions"><span class="role-badge role-student">Учень</span><button class="btn small secondary" type="button" data-action="open-student-card" data-student-id="${student.id}">Картка учня</button></div></div></div>`;
       }).join("") || empty("Адміністратор ще не призначив тобі учнів.")}</div></div>
       ${state.selectedStudentId ? renderStudentInternalCard(state.selectedStudentId) : ""}
     `;
@@ -1351,7 +1351,7 @@
     return `<div class="list">${members.map((member) => {
       const isSelf = member.user_id === state.session.user.id;
       const roles = membershipRoles(member);
-      return `<div class="item"><div class="item-head"><div><p class="item-title">${escape(nameOf(member.user_id))}</p><div class="meta">${escape(isSelf ? "Цей акаунт" : "Активний доступ")}</div></div><div class="role-badges">${roleBadges(roles)}</div></div><form id="changeUserRolesForm" class="inline-form"><input type="hidden" name="userId" value="${member.user_id}" />${roleCheckboxes(roles)}<button class="btn small secondary" type="submit">Зберегти ролі</button>${roles.includes("student") ? `<button class="btn small secondary" type="button" data-action="open-student-card" data-student-id="${member.user_id}">Педагогічна картка</button>` : ""}${isSelf ? "" : `<button class="btn small secondary" type="button" data-action="suspend-user" data-user-id="${member.user_id}">Призупинити</button><button class="btn small danger" type="button" data-action="delete-user" data-user-id="${member.user_id}" data-user-name="${escapeAttr(nameOf(member.user_id))}">Видалити</button>`}</form></div>`;
+      return `<div class="item"><div class="item-head"><div><p class="item-title">${escape(nameOf(member.user_id))}</p><div class="meta">${escape(isSelf ? "Цей акаунт" : "Активний доступ")}</div></div><div class="role-badges">${roleBadges(roles)}</div></div><form id="changeUserRolesForm" class="inline-form"><input type="hidden" name="userId" value="${member.user_id}" />${roleCheckboxes(roles)}<button class="btn small secondary" type="submit">Зберегти ролі</button>${roles.includes("student") ? `<button class="btn small secondary" type="button" data-action="open-student-card" data-student-id="${member.user_id}">Картка учня</button>` : ""}${isSelf ? "" : `<button class="btn small secondary" type="button" data-action="suspend-user" data-user-id="${member.user_id}">Призупинити</button><button class="btn small danger" type="button" data-action="delete-user" data-user-id="${member.user_id}" data-user-name="${escapeAttr(nameOf(member.user_id))}">Видалити</button>`}</form></div>`;
     }).join("") || empty("Поки немає активних користувачів.")}</div>`;
   }
 
@@ -1363,7 +1363,7 @@
     const notes = state.data.studentInternalNotes.filter((item) => item.student_id === studentId);
     return `
       <section class="card student-internal-card">
-        <div class="item-head"><div><p class="eyebrow">Лише для команди</p><h2>Педагогічна картка: ${escape(student.full_name)}</h2><p class="muted">Ці відомості й нотатки недоступні учню.</p></div><button class="btn small secondary" type="button" data-action="close-student-card">Закрити</button></div>
+        <div class="item-head"><div><p class="eyebrow">Лише для команди</p><h2>Картка учня: ${escape(student.full_name)}</h2><p class="muted">Ці відомості й нотатки недоступні учню.</p></div><button class="btn small secondary" type="button" data-action="close-student-card">Закрити</button></div>
         <div class="work-grid compact-grid">
           <form id="studentInternalProfileForm" class="stack"><input type="hidden" name="studentId" value="${escapeAttr(studentId)}" />
             <div class="field"><label>Мета навчання</label><textarea name="goal" placeholder="Наприклад: вільно говорити англійською для роботи">${escape(profile.goal || "")}</textarea></div>
