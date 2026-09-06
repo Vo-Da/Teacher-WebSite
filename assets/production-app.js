@@ -426,13 +426,12 @@
       if (form.id === "assignTeacherStudentForm") await assignTeacherStudent(form);
       if (form.id === "createRateForm") await createRate(form);
       if (form.id === "createLessonForm") await createLesson(form);
-      if (form.id === "lessonStatusForm") await setLessonStatus(form);
+      if (form.id === "lessonCardForm") await saveLessonCard(form);
       if (form.id === "createHomeworkForm") await createHomework(form);
       if (form.id === "recordPaymentForm") await recordPayment(form);
       if (form.id === "submitHomeworkForm") await submitHomework(form);
       if (form.id === "feedbackForm") await sendFeedback(form);
-      if (form.id === "studentInternalProfileForm") await saveStudentInternalProfile(form);
-      if (form.id === "studentInternalNoteForm") await addStudentInternalNote(form);
+      if (form.id === "studentInternalCardForm") await saveStudentInternalCard(form);
       if (form.id === "adminCreateUserForm") await createAdminUser(form);
       if (form.id === "changeUserRolesForm") await changeUserRoles(form);
     } catch (error) {
@@ -569,15 +568,35 @@
     await refreshContext();
   }
 
-  async function setLessonStatus(form) {
+  async function saveLessonCard(form) {
+    const lessonId = value(form, "lessonId");
+    const homeworkTitle = value(form, "homeworkTitle");
+    const homeworkDescription = value(form, "homeworkDescription");
+    const homeworkDeadline = value(form, "homeworkDeadline");
+    const hasHomeworkFiles = hasSelectedFiles(form, '[name="homeworkFiles"], [data-recorded-media]');
+    const hasHomeworkDetails = homeworkTitle || homeworkDescription || homeworkDeadline || hasHomeworkFiles;
+    if (hasHomeworkDetails && !homeworkTitle) throw new Error("Щоб опублікувати домашнє, додай його назву.");
+
     const { error } = await state.client.rpc("set_lesson_status", {
-      p_lesson_id: value(form, "lessonId"),
+      p_lesson_id: lessonId,
       p_status: value(form, "status"),
       p_note: value(form, "teacherNote")
     });
     if (error) throw error;
-    await uploadInputFiles(form, { lesson_id: value(form, "lessonId") });
-    state.notice = success("Статус заняття оновлено. За потреби фінансовий запис створено автоматично.");
+    if (hasHomeworkDetails) {
+      const { data, error: homeworkError } = await state.client.rpc("create_homework", {
+        p_school_id: state.school.id,
+        p_lesson_id: lessonId,
+        p_title: homeworkTitle,
+        p_description: homeworkDescription,
+        p_deadline_at: homeworkDeadline ? new Date(homeworkDeadline).toISOString() : null,
+        p_student_ids: lessonStudents(lessonId).map((row) => row.student_id)
+      });
+      if (homeworkError) throw homeworkError;
+      await uploadInputFiles(form, { homework_id: data }, '[name="homeworkFiles"], [data-recorded-media]');
+    }
+    await uploadInputFiles(form, { lesson_id: lessonId }, '[name="lessonFiles"]');
+    state.notice = success(hasHomeworkDetails ? "Картку заняття й домашнє збережено." : "Картку заняття збережено. За потреби фінансовий запис створено автоматично.");
     await refreshContext();
   }
 
@@ -644,7 +663,7 @@
     await refreshContext();
   }
 
-  async function saveStudentInternalProfile(form) {
+  async function saveStudentInternalCard(form) {
     const studentId = value(form, "studentId");
     if (!studentId) throw new Error("Обери учня для картки учня.");
     const { error } = await state.client.from("student_internal_profiles").upsert({
@@ -657,22 +676,17 @@
       updated_at: new Date().toISOString()
     }, { onConflict: "school_id,student_id" });
     if (error) throw error;
-    state.notice = success("Педагогічну картку оновлено. Учень її не бачить.");
-    await refreshContext();
-  }
-
-  async function addStudentInternalNote(form) {
-    const studentId = value(form, "studentId");
     const body = value(form, "body");
-    if (!studentId || !body) throw new Error("Додай текст нотатки.");
-    const { error } = await state.client.from("student_internal_notes").insert({
-      school_id: state.school.id,
-      student_id: studentId,
-      author_id: state.session.user.id,
-      body
-    });
-    if (error) throw error;
-    state.notice = success("Внутрішню нотатку додано.");
+    if (body) {
+      const { error: noteError } = await state.client.from("student_internal_notes").insert({
+        school_id: state.school.id,
+        student_id: studentId,
+        author_id: state.session.user.id,
+        body
+      });
+      if (noteError) throw noteError;
+    }
+    state.notice = success(body ? "Картку учня та внутрішню нотатку збережено." : "Картку учня збережено. Учень її не бачить.");
     await refreshContext();
   }
 
@@ -953,9 +967,13 @@
     return `
       <div class="lesson-focus">
         <div class="item"><div class="item-head"><div><p class="item-title">${escape(subjectName(lesson.subject_id))} · ${escape(lesson.title)}</p><div class="meta">${escape(formatDateTime(lesson.starts_at))} — ${escape(formatTime(lesson.ends_at))}</div><div class="meta">${escape(participants.map((row) => nameOf(row.student_id)).join(", "))}</div></div>${statusBadge(lesson.status)}</div>${lesson.meeting_url ? `<a href="${escapeAttr(lesson.meeting_url)}" target="_blank" rel="noopener">Відкрити зустріч</a>` : ""}${renderAttachments({ lesson_id: lesson.id })}</div>
-        <form id="lessonStatusForm" class="stack" style="margin-top:12px;"><input type="hidden" name="lessonId" value="${lesson.id}" /><div class="field"><label>Статус</label><select name="status">${lessonStatusOptions(lesson.status)}</select></div><div class="field"><label>Нотатки викладача</label><textarea name="teacherNote" placeholder="Що пройшли, що повторити наступного разу">${escape(lesson.teacher_note || "")}</textarea></div><button class="btn secondary" type="submit">Зберегти статус і нотатки</button></form>
-        <form id="createHomeworkForm" class="stack filebox" style="margin-top:12px;"><input type="hidden" name="lessonId" value="${lesson.id}" /><strong>Домашнє до цього уроку</strong><div class="field"><label>Назва</label><input name="title" required /></div><div class="field"><label>Опис</label><textarea name="description"></textarea></div><div class="field"><label>Дедлайн</label><input name="deadline" type="datetime-local" /></div>${renderVoiceCapture(`homework-${lesson.id}`, "Голосова інструкція")}<div class="field"><label>Файли</label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn primary" type="submit">Опублікувати домашнє</button></form>
-        <form id="lessonAttachmentForm" class="stack filebox" style="margin-top:12px;" data-upload-target="lesson"><input type="hidden" name="lessonId" value="${lesson.id}" /><strong>Матеріали до уроку</strong><input name="files" type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.docx" /><button class="btn secondary" type="button" data-action="upload-lesson-files" data-lesson-id="${lesson.id}">Завантажити файли</button></form>
+        <form id="lessonCardForm" class="stack" style="margin-top:12px;"><input type="hidden" name="lessonId" value="${lesson.id}" />
+          <div class="field"><label>Статус</label><select name="status">${lessonStatusOptions(lesson.status)}</select></div>
+          <div class="field"><label>Нотатки викладача</label><textarea name="teacherNote" placeholder="Що пройшли, що повторити наступного разу">${escape(lesson.teacher_note || "")}</textarea></div>
+          <div class="filebox stack"><strong>Домашнє до цього уроку <span class="field-optional">(необов’язково)</span></strong><div class="field"><label>Назва</label><input name="homeworkTitle" /></div><div class="field"><label>Опис</label><textarea name="homeworkDescription"></textarea></div><div class="field"><label>Дедлайн</label><input name="homeworkDeadline" type="datetime-local" /></div>${renderVoiceCapture(`homework-${lesson.id}`, "Голосова інструкція")}<div class="field"><label>Файли до домашнього</label><input name="homeworkFiles" type="file" multiple accept="${supportedFileAccept()}" /></div></div>
+          <div class="filebox stack"><strong>Матеріали до уроку <span class="field-optional">(необов’язково)</span></strong><input name="lessonFiles" type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.docx" /></div>
+          <button class="btn primary" type="submit">Зберегти картку заняття</button>
+        </form>
         <div style="margin-top:12px;"><strong>Домашні до уроку</strong>${lessonTasks.length ? `<div class="list" style="margin-top:8px;">${lessonTasks.map((task) => `<div class="item"><p class="item-title">${escape(task.title)}</p><div class="meta">${task.deadline_at ? "Дедлайн: " + escape(formatDateTime(task.deadline_at)) : "Без дедлайну"}</div></div>`).join("")}</div>` : '<div class="meta">Ще не опубліковано.</div>'}</div>
       </div>
     `;
@@ -1107,8 +1125,12 @@
     if (state.recording.recorder.state !== "inactive") state.recording.recorder.stop();
   }
 
-  async function uploadInputFiles(form, target) {
-    const inputs = Array.from(form?.querySelectorAll('input[type="file"]') || []);
+  function hasSelectedFiles(form, selector = 'input[type="file"]') {
+    return Array.from(form?.querySelectorAll(selector) || []).some((input) => input.files?.length);
+  }
+
+  async function uploadInputFiles(form, target, selector = 'input[type="file"]') {
+    const inputs = Array.from(form?.querySelectorAll(selector) || []);
     const files = inputs.flatMap((input) => Array.from(input.files || []));
     if (!files.length) return;
     const allowed = new Set([
@@ -1365,17 +1387,19 @@
     return `
       <section class="card student-internal-card">
         <div class="item-head"><div><p class="eyebrow">Лише для команди</p><h2>Картка учня: ${escape(student.full_name)}</h2><p class="muted">Ці відомості й нотатки недоступні учню.</p></div><button class="btn small secondary" type="button" data-action="close-student-card">Закрити</button></div>
-        <div class="work-grid compact-grid">
-          <form id="studentInternalProfileForm" class="stack"><input type="hidden" name="studentId" value="${escapeAttr(studentId)}" />
+        <form id="studentInternalCardForm" class="student-internal-form"><input type="hidden" name="studentId" value="${escapeAttr(studentId)}" />
+          <div class="work-grid compact-grid">
+          <div class="stack">
             <div class="field"><label>Мета навчання</label><textarea name="goal" placeholder="Наприклад: вільно говорити англійською для роботи">${escape(profile.goal || "")}</textarea></div>
             <div class="two-fields"><div class="field"><label>Рівень на старті</label><input name="startingLevel" value="${escapeAttr(profile.starting_level || "")}" placeholder="Наприклад: A2" /></div><div class="field"><label>Поточний рівень</label><input name="currentLevel" value="${escapeAttr(profile.current_level || "")}" placeholder="Наприклад: B1" /></div></div>
-            <button class="btn primary" type="submit">Зберегти картку</button>
-          </form>
+          </div>
           <div class="stack"><div><h3>Внутрішні нотатки</h3><p class="muted">Видно лише адміністраторам і викладачам цього учня.</p></div>
-            <form id="studentInternalNoteForm" class="stack"><input type="hidden" name="studentId" value="${escapeAttr(studentId)}" /><div class="field"><label>Нова нотатка</label><textarea name="body" required maxlength="4000" placeholder="Спостереження, домовленість, наступний крок"></textarea></div><button class="btn secondary" type="submit">Додати нотатку</button></form>
+            <div class="field"><label>Нова нотатка <span class="field-optional">(необов’язково)</span></label><textarea name="body" maxlength="4000" placeholder="Спостереження, домовленість, наступний крок"></textarea></div>
             <div class="note-list">${notes.map((note) => `<div class="internal-note"><div class="meta">${escape(formatDateTime(note.created_at))} · ${escape(nameOf(note.author_id))}</div><div>${escape(note.body).replace(/\n/g, "<br>")}</div></div>`).join("") || empty("Внутрішніх нотаток ще немає.")}</div>
           </div>
-        </div>
+          </div>
+          <button class="btn primary" type="submit">Зберегти картку та нотатку</button>
+        </form>
       </section>
     `;
   }

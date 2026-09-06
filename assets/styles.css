@@ -669,6 +669,11 @@ textarea:focus {
   grid-template-columns: minmax(0, 1fr);
 }
 
+.student-internal-form {
+  display: grid;
+  gap: 16px;
+}
+
 .school-shell {
   min-height: 100vh;
   padding-bottom: 38px;
