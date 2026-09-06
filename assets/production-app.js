@@ -546,7 +546,7 @@
     const { error } = await state.client.from("wallet_ledger").insert({
       school_id: state.school.id,
       student_id: value(form, "studentId"),
-      teacher_id: state.session.user.id,
+      teacher_id: null,
       kind: "payment",
       amount_uah: amount,
       teacher_payout_uah: 0,
@@ -656,9 +656,9 @@
 
   function navigationForRole(role) {
     return role === "admin"
-      ? [["overview", "Огляд"], ["people", "Люди"], ["subjects", "Предмети і тарифи"], ["finance", "Фінанси"]]
+      ? [["overview", "Огляд"], ["people", "Люди"], ["subjects", "Предмети і тарифи"], ["payments", "Оплати"], ["finance", "Фінанси"]]
       : role === "teacher"
-        ? [["calendar", "Календар"], ["students", "Мої учні"], ["homework", "Домашні"], ["payments", "Оплати"]]
+        ? [["calendar", "Календар"], ["students", "Мої учні"], ["homework", "Домашні"]]
         : [["today", "Сьогодні"], ["calendar", "Календар"], ["homework", "Домашні"]];
   }
 
@@ -666,6 +666,7 @@
     if (state.activeView === "overview") return renderAdminOverview();
     if (state.activeView === "people") return renderPeople();
     if (state.activeView === "subjects") return renderSubjectsAndRates();
+    if (state.activeView === "payments") return renderAdminPayments();
     return renderFinance();
   }
 
@@ -710,7 +711,7 @@
       </div>
       <div class="work-grid">
         <div class="card"><h2>Створити акаунт</h2><p class="muted">Новий користувач отримає активний доступ одразу. Для однієї людини можна вибрати кілька ролей.</p><form id="adminCreateUserForm" class="stack"><div class="field"><label>Ім’я та прізвище</label><input name="fullName" required /></div><div class="field"><label>Email</label><input name="email" type="email" required /></div><div class="field"><label>Тимчасовий пароль</label><input name="password" type="password" minlength="8" required /></div><div class="field"><label>Ролі</label>${roleCheckboxes(["student"])}</div><button class="btn primary" type="submit">Створити акаунт</button></form></div>
-        <div class="card"><h2>Доступи</h2><p class="muted">Призупинення зберігає історію. Видалити можна лише акаунт без уроків, файлів і фінансових записів.</p><div class="list">${state.data.memberships.filter((member) => member.status === "suspended").map((member) => `<div class="item"><div><p class="item-title">${escape(nameOf(member.user_id))}</p><div class="meta">${escape(roleTitles(membershipRoles(member)).join(", "))} · доступ призупинено</div></div><button class="btn small secondary" type="button" data-action="activate-user" data-user-id="${member.user_id}">Відновити</button></div>`).join("") || empty("Призупинених акаунтів немає.")}</div></div>
+        <div class="card"><h2>Доступи</h2><p class="muted">Призупинення зберігає історію. Видалення після підтвердження прибирає акаунт і пов’язані дані назавжди.</p><div class="list">${state.data.memberships.filter((member) => member.status === "suspended").map((member) => `<div class="item"><div><p class="item-title">${escape(nameOf(member.user_id))}</p><div class="meta">${escape(roleTitles(membershipRoles(member)).join(", "))} · доступ призупинено</div></div><button class="btn small secondary" type="button" data-action="activate-user" data-user-id="${member.user_id}">Відновити</button></div>`).join("") || empty("Призупинених акаунтів немає.")}</div></div>
       </div>
       <div class="card"><h2>Активні зв’язки</h2><div class="relation-list">${state.data.teacherStudents.map((relation) => `<div class="item"><strong>${escape(nameOf(relation.teacher_id))}</strong><span>викладає</span><strong>${escape(nameOf(relation.student_id))}</strong><button class="btn small secondary" type="button" data-action="remove-assignment" data-relation-id="${relation.id}">Прибрати</button></div>`).join("") || empty("Ще немає призначень.")}</div></div>
       <div class="work-grid"><div class="card"><h2>Викладачі</h2>${renderPeopleList(teachers)}</div><div class="card"><h2>Учні</h2>${renderPeopleList(students)}</div></div>
@@ -748,10 +749,18 @@
     `;
   }
 
+  function renderAdminPayments() {
+    const students = activeMembers("student");
+    return `
+      <div class="page-heading"><div><p class="eyebrow">Оплати</p><h1>Зафіксувати оплату</h1><p class="muted">Обери учня, який вніс оплату. Запис одразу потрапить до фінансового журналу.</p></div></div>
+      <div class="work-grid"><div class="card"><h2>Нова оплата</h2><form id="recordPaymentForm" class="stack">${selectField("studentId", "Учень", students, true)}<div class="field"><label>Сума, грн</label><input name="amount" type="number" step="1" min="1" required /></div><div class="field"><label>Коментар</label><textarea name="note" placeholder="Наприклад: оплата за вересень готівкою"></textarea></div><button class="btn primary" type="submit">Внести оплату</button></form></div><div class="card"><h2>Що відбувається після збереження</h2><div class="process-note"><strong>1.</strong> Оплата додається до фінансового журналу.<br><strong>2.</strong> Баланс учня оновлюється одразу.<br><strong>3.</strong> Проведені уроки списуються автоматично за встановленим тарифом.</div></div></div>
+      <div class="card"><h2>Останні оплати</h2><div class="list">${state.data.ledger.filter((row) => row.kind === "payment").slice(0, 20).map((row) => `<div class="item"><div><p class="item-title">${escape(nameOf(row.student_id))}</p><div class="meta">${formatDateTime(row.created_at)} · ${escape(row.note || "Без коментаря")}</div></div><strong class="amount-positive">${signedMoney(row.amount_uah)}</strong></div>`).join("") || empty("Оплат ще немає.")}</div></div>
+    `;
+  }
+
   function renderTeacherView() {
     if (state.activeView === "students") return renderTeacherStudents();
     if (state.activeView === "homework") return renderTeacherHomework();
-    if (state.activeView === "payments") return renderTeacherPayments();
     return renderTeacherCalendar();
   }
 
@@ -789,14 +798,6 @@
     return `
       <div class="page-heading"><div><p class="eyebrow">Перевірка</p><h1>Домашні завдання</h1><p class="muted">Публікуй завдання, дивись відповіді й повертай роботу на доопрацювання.</p></div></div>
       <div class="work-grid"><div class="card"><h2>Нове домашнє</h2>${renderHomeworkForm(selected)}</div><div class="card"><h2>На перевірці</h2>${renderTeacherHomeworkReview(tasks)}</div></div>
-    `;
-  }
-
-  function renderTeacherPayments() {
-    const students = teacherStudents();
-    return `
-      <div class="page-heading"><div><p class="eyebrow">Оплати</p><h1>Зафіксувати оплату</h1><p class="muted">Ти вносиш факт оплати. Повний гаманець і звіти бачить адміністратор.</p></div></div>
-      <div class="work-grid"><div class="card"><h2>Нова оплата</h2><form id="recordPaymentForm" class="stack">${selectField("studentId", "Учень", students.map((s) => ({ user_id: s.id })), true)}<div class="field"><label>Сума, грн</label><input name="amount" type="number" step="1" min="1" required /></div><div class="field"><label>Коментар</label><textarea name="note" placeholder="Наприклад: оплата за вересень готівкою"></textarea></div><button class="btn primary" type="submit">Внести оплату</button></form></div><div class="card"><h2>Що відбувається після збереження</h2><div class="process-note"><strong>1.</strong> Оплата додається до фінансового журналу.<br><strong>2.</strong> Адміністратор бачить баланс учня.<br><strong>3.</strong> Проведені уроки списуються автоматично за встановленим тарифом.</div></div></div>
     `;
   }
 

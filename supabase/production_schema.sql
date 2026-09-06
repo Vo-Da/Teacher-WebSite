@@ -383,7 +383,6 @@ create policy "attachments_read_related" on public.file_attachments for select t
 );
 
 create policy "wallet_admin_read" on public.wallet_ledger for select to authenticated using (public.is_school_admin(school_id));
-create policy "wallet_teacher_create_payment" on public.wallet_ledger for insert to authenticated with check (kind = 'payment' and created_by = auth.uid() and teacher_id = auth.uid() and exists (select 1 from public.teacher_students ts where ts.school_id = wallet_ledger.school_id and ts.teacher_id = auth.uid() and ts.student_id = wallet_ledger.student_id and ts.is_active));
 create policy "wallet_admin_manage" on public.wallet_ledger for all to authenticated using (public.is_school_admin(school_id)) with check (public.is_school_admin(school_id));
 
 create policy "audit_admin_read" on public.audit_events for select to authenticated using (public.is_school_admin(school_id));
