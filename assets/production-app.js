@@ -16,6 +16,8 @@
     selectedDate: dateInTimezone(new Date(), "Europe/Kyiv"),
     calendarOffset: 0,
     selectedLessonId: null,
+    selectedStudentId: null,
+    recording: null,
     notice: null,
     loading: false
   };
@@ -39,6 +41,8 @@
       homeworkStudents: [],
       submissions: [],
       attachments: [],
+      studentInternalProfiles: [],
+      studentInternalNotes: [],
       ledger: []
     };
   }
@@ -78,6 +82,7 @@
     state.canBootstrapSchool = false;
     state.data = emptyData();
     state.selectedLessonId = null;
+    state.selectedStudentId = null;
 
     if (!state.session) {
       state.activeRole = null;
@@ -130,13 +135,16 @@
   async function loadDashboardData() {
     const schoolId = state.membership.school_id;
     const canAdminister = hasRole("admin");
-    const [subjects, relations, lessons, homework, profiles, memberships] = await Promise.all([
+    const canManageStudentContext = state.activeRole === "admin" || state.activeRole === "teacher";
+    const [subjects, relations, lessons, homework, profiles, memberships, studentInternalProfiles, studentInternalNotes] = await Promise.all([
       selectRows("subjects", (q) => q.eq("school_id", schoolId).order("name")),
       selectRows("teacher_students", (q) => q.eq("school_id", schoolId).eq("is_active", true)),
       selectRows("lessons", (q) => q.eq("school_id", schoolId).order("starts_at")),
       selectRows("homework", (q) => q.eq("school_id", schoolId).order("created_at", { ascending: false })),
       selectRows("profiles", (q) => q.order("full_name")),
-      canAdminister ? selectRows("school_memberships", (q) => q.eq("school_id", schoolId)) : Promise.resolve([])
+      canAdminister ? selectRows("school_memberships", (q) => q.eq("school_id", schoolId)) : Promise.resolve([]),
+      canManageStudentContext ? selectRows("student_internal_profiles", (q) => q.eq("school_id", schoolId)) : Promise.resolve([]),
+      canManageStudentContext ? selectRows("student_internal_notes", (q) => q.eq("school_id", schoolId).order("created_at", { ascending: false })) : Promise.resolve([])
     ]);
 
     state.data.subjects = subjects;
@@ -145,6 +153,8 @@
     state.data.homework = homework;
     state.data.profiles = profiles;
     state.data.memberships = memberships;
+    state.data.studentInternalProfiles = studentInternalProfiles;
+    state.data.studentInternalNotes = studentInternalNotes;
 
     const lessonIds = lessons.map((item) => item.id);
     const homeworkIds = homework.map((item) => item.id);
@@ -310,6 +320,24 @@
         renderDashboard();
         return;
       }
+      if (action === "open-student-card") {
+        state.selectedStudentId = target.dataset.studentId || null;
+        renderDashboard();
+        return;
+      }
+      if (action === "close-student-card") {
+        state.selectedStudentId = null;
+        renderDashboard();
+        return;
+      }
+      if (action === "start-media-recording") {
+        await startMediaRecording(target);
+        return;
+      }
+      if (action === "stop-media-recording") {
+        stopMediaRecording(target.dataset.captureId);
+        return;
+      }
       if (action === "approve-request") {
         await approveRequest(target.dataset.requestId);
         return;
@@ -380,6 +408,8 @@
       if (form.id === "recordPaymentForm") await recordPayment(form);
       if (form.id === "submitHomeworkForm") await submitHomework(form);
       if (form.id === "feedbackForm") await sendFeedback(form);
+      if (form.id === "studentInternalProfileForm") await saveStudentInternalProfile(form);
+      if (form.id === "studentInternalNoteForm") await addStudentInternalNote(form);
       if (form.id === "adminCreateUserForm") await createAdminUser(form);
       if (form.id === "changeUserRolesForm") await changeUserRoles(form);
     } catch (error) {
@@ -518,6 +548,7 @@
       p_note: value(form, "teacherNote")
     });
     if (error) throw error;
+    await uploadInputFiles(form, { lesson_id: value(form, "lessonId") });
     state.notice = success("Статус заняття оновлено. За потреби фінансовий запис створено автоматично.");
     await refreshContext();
   }
@@ -582,6 +613,38 @@
     if (error) throw error;
     await uploadInputFiles(form, { homework_student_id: homeworkStudentId });
     state.notice = success("Зворотний зв’язок збережено.");
+    await refreshContext();
+  }
+
+  async function saveStudentInternalProfile(form) {
+    const studentId = value(form, "studentId");
+    if (!studentId) throw new Error("Обери учня для педагогічної картки.");
+    const { error } = await state.client.from("student_internal_profiles").upsert({
+      school_id: state.school.id,
+      student_id: studentId,
+      goal: value(form, "goal"),
+      starting_level: value(form, "startingLevel"),
+      current_level: value(form, "currentLevel"),
+      updated_by: state.session.user.id,
+      updated_at: new Date().toISOString()
+    }, { onConflict: "school_id,student_id" });
+    if (error) throw error;
+    state.notice = success("Педагогічну картку оновлено. Учень її не бачить.");
+    await refreshContext();
+  }
+
+  async function addStudentInternalNote(form) {
+    const studentId = value(form, "studentId");
+    const body = value(form, "body");
+    if (!studentId || !body) throw new Error("Додай текст нотатки.");
+    const { error } = await state.client.from("student_internal_notes").insert({
+      school_id: state.school.id,
+      student_id: studentId,
+      author_id: state.session.user.id,
+      body
+    });
+    if (error) throw error;
+    state.notice = success("Внутрішню нотатку додано.");
     await refreshContext();
   }
 
@@ -715,6 +778,7 @@
       </div>
       <div class="card"><h2>Активні зв’язки</h2><div class="relation-list">${state.data.teacherStudents.map((relation) => `<div class="item"><strong>${escape(nameOf(relation.teacher_id))}</strong><span>викладає</span><strong>${escape(nameOf(relation.student_id))}</strong><button class="btn small secondary" type="button" data-action="remove-assignment" data-relation-id="${relation.id}">Прибрати</button></div>`).join("") || empty("Ще немає призначень.")}</div></div>
       <div class="work-grid"><div class="card"><h2>Викладачі</h2>${renderPeopleList(teachers)}</div><div class="card"><h2>Учні</h2>${renderPeopleList(students)}</div></div>
+      ${state.selectedStudentId ? renderStudentInternalCard(state.selectedStudentId) : ""}
     `;
   }
 
@@ -787,8 +851,9 @@
       <div class="card"><div class="list">${students.map((student) => {
         const upcoming = state.data.lessons.filter((lesson) => lesson.teacher_id === state.session.user.id && lessonStudents(lesson.id).some((row) => row.student_id === student.id) && new Date(lesson.starts_at) >= new Date()).sort((a, b) => a.starts_at.localeCompare(b.starts_at))[0];
         const submitted = teacherHomeworkStudents().filter((row) => row.student_id === student.id && row.status === "submitted").length;
-        return `<div class="item"><div class="item-head"><div><p class="item-title">${escape(student.full_name)}</p><div class="meta">Наступний урок: ${upcoming ? escape(formatDateTime(upcoming.starts_at)) + " · " + escape(subjectName(upcoming.subject_id)) : "не заплановано"}</div><div class="meta">Робіт на перевірці: ${submitted}</div></div><span class="role-badge role-student">Учень</span></div></div>`;
+        return `<div class="item"><div class="item-head"><div><p class="item-title">${escape(student.full_name)}</p><div class="meta">Наступний урок: ${upcoming ? escape(formatDateTime(upcoming.starts_at)) + " · " + escape(subjectName(upcoming.subject_id)) : "не заплановано"}</div><div class="meta">Робіт на перевірці: ${submitted}</div></div><div class="item-actions"><span class="role-badge role-student">Учень</span><button class="btn small secondary" type="button" data-action="open-student-card" data-student-id="${student.id}">Педагогічна картка</button></div></div></div>`;
       }).join("") || empty("Адміністратор ще не призначив тобі учнів.")}</div></div>
+      ${state.selectedStudentId ? renderStudentInternalCard(state.selectedStudentId) : ""}
     `;
   }
 
@@ -861,7 +926,7 @@
       <div class="lesson-focus">
         <div class="item"><div class="item-head"><div><p class="item-title">${escape(subjectName(lesson.subject_id))} · ${escape(lesson.title)}</p><div class="meta">${escape(formatDateTime(lesson.starts_at))} — ${escape(formatTime(lesson.ends_at))}</div><div class="meta">${escape(participants.map((row) => nameOf(row.student_id)).join(", "))}</div></div>${statusBadge(lesson.status)}</div>${lesson.meeting_url ? `<a href="${escapeAttr(lesson.meeting_url)}" target="_blank" rel="noopener">Відкрити зустріч</a>` : ""}${renderAttachments({ lesson_id: lesson.id })}</div>
         <form id="lessonStatusForm" class="stack" style="margin-top:12px;"><input type="hidden" name="lessonId" value="${lesson.id}" /><div class="field"><label>Статус</label><select name="status">${lessonStatusOptions(lesson.status)}</select></div><div class="field"><label>Нотатки викладача</label><textarea name="teacherNote" placeholder="Що пройшли, що повторити наступного разу">${escape(lesson.teacher_note || "")}</textarea></div><button class="btn secondary" type="submit">Зберегти статус і нотатки</button></form>
-        <form id="createHomeworkForm" class="stack filebox" style="margin-top:12px;"><input type="hidden" name="lessonId" value="${lesson.id}" /><strong>Домашнє до цього уроку</strong><div class="field"><label>Назва</label><input name="title" required /></div><div class="field"><label>Опис</label><textarea name="description"></textarea></div><div class="field"><label>Дедлайн</label><input name="deadline" type="datetime-local" /></div><div class="field"><label>Файли</label><input name="files" type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.docx" /></div><button class="btn primary" type="submit">Опублікувати домашнє</button></form>
+        <form id="createHomeworkForm" class="stack filebox" style="margin-top:12px;"><input type="hidden" name="lessonId" value="${lesson.id}" /><strong>Домашнє до цього уроку</strong><div class="field"><label>Назва</label><input name="title" required /></div><div class="field"><label>Опис</label><textarea name="description"></textarea></div><div class="field"><label>Дедлайн</label><input name="deadline" type="datetime-local" /></div>${renderVoiceCapture(`homework-${lesson.id}`, "Голосова інструкція")}<div class="field"><label>Файли</label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn primary" type="submit">Опублікувати домашнє</button></form>
         <form id="lessonAttachmentForm" class="stack filebox" style="margin-top:12px;" data-upload-target="lesson"><input type="hidden" name="lessonId" value="${lesson.id}" /><strong>Матеріали до уроку</strong><input name="files" type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.docx" /><button class="btn secondary" type="button" data-action="upload-lesson-files" data-lesson-id="${lesson.id}">Завантажити файли</button></form>
         <div style="margin-top:12px;"><strong>Домашні до уроку</strong>${lessonTasks.length ? `<div class="list" style="margin-top:8px;">${lessonTasks.map((task) => `<div class="item"><p class="item-title">${escape(task.title)}</p><div class="meta">${task.deadline_at ? "Дедлайн: " + escape(formatDateTime(task.deadline_at)) : "Без дедлайну"}</div></div>`).join("")}</div>` : '<div class="meta">Ще не опубліковано.</div>'}</div>
       </div>
@@ -875,7 +940,8 @@
         <div class="field"><label>Пов’язати із заняттям</label><select name="lessonId"><option value="">Без прив’язки</option>${state.data.lessons.filter((lesson) => lesson.teacher_id === state.session.user.id).map((lesson) => `<option value="${lesson.id}" ${selected?.id === lesson.id ? "selected" : ""}>${escape(formatDateTime(lesson.starts_at))} · ${escape(lesson.title)}</option>`).join("")}</select></div>
         <div class="field"><label>Назва</label><input name="title" required /></div><div class="field"><label>Опис</label><textarea name="description"></textarea></div><div class="field"><label>Дедлайн</label><input name="deadline" type="datetime-local" /></div>
         ${selected ? "" : selectField("studentIds", "Учні", students.map((student) => ({ user_id: student.id })), true, null, true)}
-        <div class="field"><label>Вкладення</label><input name="files" type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.docx" /></div><button class="btn primary" type="submit">Опублікувати</button>
+        ${renderVoiceCapture(`homework-${selected?.id || "new"}`, "Голосова інструкція")}
+        <div class="field"><label>Вкладення</label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn primary" type="submit">Опублікувати</button>
       </form>
     `;
   }
@@ -893,7 +959,7 @@
     if (!task) return "";
     const submissions = submissionsFor(recipient.id);
     return `
-      <article class="card homework-card"><div class="item-head"><div><p class="eyebrow">${task.deadline_at ? "Дедлайн: " + escape(formatDateTime(task.deadline_at)) : "Без дедлайну"}</p><h2>${escape(task.title)}</h2></div>${submissionBadge(recipient.status)}</div><p>${escape(task.description || "Без опису")}</p>${renderAttachments({ homework_id: task.id })}${recipient.teacher_comment ? `<div class="feedback-box"><strong>Коментар викладача</strong><div>${escape(recipient.teacher_comment)}</div>${recipient.grade ? `<div>Оцінка: ${escape(recipient.grade)}</div>` : ""}${renderAttachments({ homework_student_id: recipient.id })}</div>` : ""}${submissions.length ? `<div class="filebox"><strong>Мої відповіді</strong>${submissions.map((submission) => `<div class="meta">${escape(formatDateTime(submission.submitted_at))}: ${escape(submission.body || "Файли")}${renderAttachments({ submission_id: submission.id })}</div>`).join("")}</div>` : ""}<form id="submitHomeworkForm" class="stack" style="margin-top:12px;"><input type="hidden" name="homeworkStudentId" value="${recipient.id}" /><div class="field"><label>Моя відповідь</label><textarea name="body" placeholder="Опиши розв’язання або додай посилання"></textarea></div><div class="field"><label>Файли відповіді</label><input name="files" type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.docx" /></div><button class="btn primary" type="submit">Надіслати відповідь</button></form></article>
+      <article class="card homework-card"><div class="item-head"><div><p class="eyebrow">${task.deadline_at ? "Дедлайн: " + escape(formatDateTime(task.deadline_at)) : "Без дедлайну"}</p><h2>${escape(task.title)}</h2></div>${submissionBadge(recipient.status)}</div><p>${escape(task.description || "Без опису")}</p>${renderAttachments({ homework_id: task.id })}${recipient.teacher_comment ? `<div class="feedback-box"><strong>Коментар викладача</strong><div>${escape(recipient.teacher_comment)}</div>${recipient.grade ? `<div>Оцінка: ${escape(recipient.grade)}</div>` : ""}${renderAttachments({ homework_student_id: recipient.id })}</div>` : ""}${submissions.length ? `<div class="filebox"><strong>Мої відповіді</strong>${submissions.map((submission) => `<div class="meta">${escape(formatDateTime(submission.submitted_at))}: ${escape(submission.body || "Файли")}${renderAttachments({ submission_id: submission.id })}</div>`).join("")}</div>` : ""}<form id="submitHomeworkForm" class="stack" style="margin-top:12px;"><input type="hidden" name="homeworkStudentId" value="${recipient.id}" /><div class="field"><label>Моя відповідь</label><textarea name="body" placeholder="Опиши розв’язання або додай посилання"></textarea></div>${renderVoiceCapture(`submission-${recipient.id}`, "Голосова відповідь")}<div class="field"><label>Файли відповіді</label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn primary" type="submit">Надіслати відповідь</button></form></article>
     `;
   }
 
@@ -948,30 +1014,101 @@
     return `<div class="attachment-list">${files.map((file) => `<button class="attachment" type="button" data-action="download-file" data-file-id="${file.id}">Завантажити: ${escape(file.original_name)}${file.byte_size ? ` <span>${formatBytes(file.byte_size)}</span>` : ""}</button>`).join("")}</div>`;
   }
 
+  function renderVoiceCapture(captureId, label) {
+    return `
+      <div class="media-capture" data-media-capture="${escapeAttr(captureId)}">
+        <div><strong>${escape(label)}</strong><div class="meta">Запиши відповідь у браузері: аудіофайл додасться до форми після зупинки запису.</div></div>
+        <input type="file" hidden data-recorded-media="${escapeAttr(captureId)}" accept="audio/webm,audio/ogg,audio/mp4,audio/mpeg" />
+        <div class="media-capture-actions"><button class="btn small secondary" type="button" data-action="start-media-recording" data-capture-id="${escapeAttr(captureId)}">Почати запис</button><button class="btn small danger" type="button" data-action="stop-media-recording" data-capture-id="${escapeAttr(captureId)}" disabled>Зупинити</button></div>
+        <div class="meta" data-capture-status>Запис ще не додано.</div>
+      </div>
+    `;
+  }
+
+  function supportedFileAccept() {
+    return ".pdf,.jpg,.jpeg,.png,.webp,.docx,.webm,.ogg,.mp3,.m4a";
+  }
+
+  async function startMediaRecording(trigger) {
+    const captureId = trigger.dataset.captureId;
+    const capture = trigger.closest("[data-media-capture]");
+    if (!capture || !captureId) throw new Error("Не вдалося підготувати запис голосу.");
+    if (state.recording) throw new Error("Спершу зупини поточний запис голосу.");
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) throw new Error("Цей браузер не підтримує запис голосу. Додай аудіофайл вручну.");
+
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const recorder = new MediaRecorder(stream);
+    const chunks = [];
+    const status = capture.querySelector("[data-capture-status]");
+    const stopButton = capture.querySelector('[data-action="stop-media-recording"]');
+    const input = capture.querySelector("input[data-recorded-media]");
+    recorder.addEventListener("dataavailable", (event) => {
+      if (event.data.size) chunks.push(event.data);
+    });
+    recorder.addEventListener("error", () => {
+      stream.getTracks().forEach((track) => track.stop());
+      state.recording = null;
+      trigger.disabled = false;
+      if (stopButton) stopButton.disabled = true;
+      if (status) status.textContent = "Не вдалося завершити запис. Спробуй ще раз або додай файл вручну.";
+    });
+    recorder.addEventListener("stop", () => {
+      stream.getTracks().forEach((track) => track.stop());
+      const mimeType = recorder.mimeType || "audio/webm";
+      const extension = mimeType.includes("ogg") ? "ogg" : mimeType.includes("mpeg") ? "mp3" : mimeType.includes("mp4") ? "m4a" : "webm";
+      const recordingFile = new File(chunks, `voice-message-${Date.now()}.${extension}`, { type: mimeType });
+      if (input) {
+        const transfer = new DataTransfer();
+        transfer.items.add(recordingFile);
+        input.files = transfer.files;
+      }
+      state.recording = null;
+      trigger.disabled = false;
+      if (stopButton) stopButton.disabled = true;
+      if (status) status.textContent = `Запис додано: ${recordingFile.name} (${formatBytes(recordingFile.size)}). Він завантажиться після надсилання форми.`;
+    });
+    state.recording = { captureId, recorder, stream };
+    trigger.disabled = true;
+    if (stopButton) stopButton.disabled = false;
+    if (status) status.textContent = "Йде запис голосу...";
+    recorder.start();
+  }
+
+  function stopMediaRecording(captureId) {
+    if (!state.recording || state.recording.captureId !== captureId) return;
+    if (state.recording.recorder.state !== "inactive") state.recording.recorder.stop();
+  }
+
   async function uploadInputFiles(form, target) {
-    const input = form?.elements?.files;
-    const files = input?.files ? Array.from(input.files) : [];
+    const inputs = Array.from(form?.querySelectorAll('input[type="file"]') || []);
+    const files = inputs.flatMap((input) => Array.from(input.files || []));
     if (!files.length) return;
     const allowed = new Set([
       "application/pdf",
       "image/jpeg",
       "image/png",
       "image/webp",
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "audio/webm",
+      "audio/ogg",
+      "audio/mp4",
+      "audio/mpeg",
+      "audio/x-m4a"
     ]);
 
     for (const file of files) {
       const extension = file.name.split(".").pop()?.toLowerCase();
-      const allowedExtension = ["pdf", "jpg", "jpeg", "png", "webp", "docx"].includes(extension);
-      if (file.size > 10 * 1024 * 1024) throw new Error(`Файл «${file.name}» перевищує ліміт 10 МБ.`);
+      const allowedExtension = ["pdf", "jpg", "jpeg", "png", "webp", "docx", "webm", "ogg", "mp3", "m4a"].includes(extension);
+      if (file.size > 50 * 1024 * 1024) throw new Error(`Файл «${file.name}» перевищує ліміт 50 МБ.`);
       if (!allowedExtension || (file.type && !allowed.has(file.type))) throw new Error(`Формат файлу «${file.name}» не підтримується.`);
 
       const fileName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
       const random = typeof crypto?.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
       const storagePath = `${state.session.user.id}/${random}-${fileName}`;
+      const mimeType = file.type || mimeTypeForExtension(extension);
       const { error: uploadError } = await state.client.storage.from("portal-files").upload(storagePath, file, {
         cacheControl: "3600",
-        contentType: file.type || "application/octet-stream",
+        contentType: mimeType,
         upsert: false
       });
       if (uploadError) throw uploadError;
@@ -980,7 +1117,7 @@
         p_school_id: state.school.id,
         p_storage_path: storagePath,
         p_original_name: file.name,
-        p_mime_type: file.type || null,
+        p_mime_type: mimeType,
         p_byte_size: file.size,
         p_lesson_id: target.lesson_id || null,
         p_homework_id: target.homework_id || null,
@@ -992,6 +1129,22 @@
         throw attachmentError;
       }
     }
+  }
+
+  function mimeTypeForExtension(extension) {
+    const mimeTypes = {
+      pdf: "application/pdf",
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      png: "image/png",
+      webp: "image/webp",
+      docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      webm: "audio/webm",
+      ogg: "audio/ogg",
+      mp3: "audio/mpeg",
+      m4a: "audio/mp4"
+    };
+    return mimeTypes[extension] || "application/octet-stream";
   }
 
   async function downloadAttachment(fileId) {
@@ -1041,6 +1194,10 @@
   function teacherStudents() {
     const ids = state.data.teacherStudents.filter((relation) => relation.teacher_id === state.session.user.id).map((relation) => relation.student_id);
     return ids.map((id) => state.data.profiles.find((profile) => profile.id === id)).filter(Boolean);
+  }
+
+  function canManageStudentCard(studentId) {
+    return state.activeRole === "admin" || (state.activeRole === "teacher" && state.data.teacherStudents.some((relation) => relation.teacher_id === state.session.user.id && relation.student_id === studentId));
   }
 
   function myLessons() {
@@ -1147,8 +1304,32 @@
     return `<div class="list">${members.map((member) => {
       const isSelf = member.user_id === state.session.user.id;
       const roles = membershipRoles(member);
-      return `<div class="item"><div class="item-head"><div><p class="item-title">${escape(nameOf(member.user_id))}</p><div class="meta">${escape(isSelf ? "Цей акаунт" : "Активний доступ")}</div></div><div class="role-badges">${roleBadges(roles)}</div></div><form id="changeUserRolesForm" class="inline-form"><input type="hidden" name="userId" value="${member.user_id}" />${roleCheckboxes(roles)}<button class="btn small secondary" type="submit">Зберегти ролі</button>${isSelf ? "" : `<button class="btn small secondary" type="button" data-action="suspend-user" data-user-id="${member.user_id}">Призупинити</button><button class="btn small danger" type="button" data-action="delete-user" data-user-id="${member.user_id}" data-user-name="${escapeAttr(nameOf(member.user_id))}">Видалити</button>`}</form></div>`;
+      return `<div class="item"><div class="item-head"><div><p class="item-title">${escape(nameOf(member.user_id))}</p><div class="meta">${escape(isSelf ? "Цей акаунт" : "Активний доступ")}</div></div><div class="role-badges">${roleBadges(roles)}</div></div><form id="changeUserRolesForm" class="inline-form"><input type="hidden" name="userId" value="${member.user_id}" />${roleCheckboxes(roles)}<button class="btn small secondary" type="submit">Зберегти ролі</button>${roles.includes("student") ? `<button class="btn small secondary" type="button" data-action="open-student-card" data-student-id="${member.user_id}">Педагогічна картка</button>` : ""}${isSelf ? "" : `<button class="btn small secondary" type="button" data-action="suspend-user" data-user-id="${member.user_id}">Призупинити</button><button class="btn small danger" type="button" data-action="delete-user" data-user-id="${member.user_id}" data-user-name="${escapeAttr(nameOf(member.user_id))}">Видалити</button>`}</form></div>`;
     }).join("") || empty("Поки немає активних користувачів.")}</div>`;
+  }
+
+  function renderStudentInternalCard(studentId) {
+    if (!canManageStudentCard(studentId)) return "";
+    const student = state.data.profiles.find((profile) => profile.id === studentId);
+    if (!student) return "";
+    const profile = state.data.studentInternalProfiles.find((item) => item.student_id === studentId) || {};
+    const notes = state.data.studentInternalNotes.filter((item) => item.student_id === studentId);
+    return `
+      <section class="card student-internal-card">
+        <div class="item-head"><div><p class="eyebrow">Лише для команди</p><h2>Педагогічна картка: ${escape(student.full_name)}</h2><p class="muted">Ці відомості й нотатки недоступні учню.</p></div><button class="btn small secondary" type="button" data-action="close-student-card">Закрити</button></div>
+        <div class="work-grid compact-grid">
+          <form id="studentInternalProfileForm" class="stack"><input type="hidden" name="studentId" value="${escapeAttr(studentId)}" />
+            <div class="field"><label>Мета навчання</label><textarea name="goal" placeholder="Наприклад: вільно говорити англійською для роботи">${escape(profile.goal || "")}</textarea></div>
+            <div class="two-fields"><div class="field"><label>Рівень на старті</label><input name="startingLevel" value="${escapeAttr(profile.starting_level || "")}" placeholder="Наприклад: A2" /></div><div class="field"><label>Поточний рівень</label><input name="currentLevel" value="${escapeAttr(profile.current_level || "")}" placeholder="Наприклад: B1" /></div></div>
+            <button class="btn primary" type="submit">Зберегти картку</button>
+          </form>
+          <div class="stack"><div><h3>Внутрішні нотатки</h3><p class="muted">Видно лише адміністраторам і викладачам цього учня.</p></div>
+            <form id="studentInternalNoteForm" class="stack"><input type="hidden" name="studentId" value="${escapeAttr(studentId)}" /><div class="field"><label>Нова нотатка</label><textarea name="body" required maxlength="4000" placeholder="Спостереження, домовленість, наступний крок"></textarea></div><button class="btn secondary" type="submit">Додати нотатку</button></form>
+            <div class="note-list">${notes.map((note) => `<div class="internal-note"><div class="meta">${escape(formatDateTime(note.created_at))} · ${escape(nameOf(note.author_id))}</div><div>${escape(note.body).replace(/\n/g, "<br>")}</div></div>`).join("") || empty("Внутрішніх нотаток ще немає.")}</div>
+          </div>
+        </div>
+      </section>
+    `;
   }
 
   function metricCard(label, number, hint) {
@@ -1295,6 +1476,8 @@
 
   function friendlyError(error) {
     const text = String(error?.message || error?.error_description || error || "Невідома помилка");
+    if (error?.name === "NotAllowedError") return "Браузер не отримав доступ до мікрофона. Дозволь його у налаштуваннях сайту та спробуй ще раз.";
+    if (error?.name === "NotFoundError") return "Мікрофон не знайдено. Під’єднай його або додай аудіофайл вручну.";
     if (text.includes("No active price")) return "Для цього учня немає активного тарифу. Адміністратор має вказати ціну уроку.";
     if (text.includes("Selected student is not assigned")) return "Цей учень не прикріплений до викладача.";
     if (text.includes("overlaps an existing lesson")) return "Цей час перетинається з іншим активним заняттям у твоєму календарі.";

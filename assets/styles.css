@@ -1028,6 +1028,53 @@ select[multiple] {
   font-weight: 500;
 }
 
+.item-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.student-internal-card {
+  margin-top: 16px;
+}
+
+.compact-grid {
+  margin-top: 14px;
+  align-items: start;
+}
+
+.note-list {
+  display: grid;
+  gap: 8px;
+}
+
+.internal-note {
+  display: grid;
+  gap: 5px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fbfdff;
+  line-height: 1.5;
+}
+
+.media-capture {
+  display: grid;
+  gap: 8px;
+  padding: 11px;
+  border: 1px dashed #8ec8c2;
+  border-radius: 10px;
+  background: #f4fbfa;
+}
+
+.media-capture-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .empty-state {
   padding: 16px;
   border: 1px dashed var(--line);

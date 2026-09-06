@@ -29,6 +29,29 @@ create table public.schools (
   created_at timestamptz not null default now()
 );
 
+-- Private teaching context. Students have no RLS policy on these tables.
+create table public.student_internal_profiles (
+  id uuid primary key default gen_random_uuid(),
+  school_id uuid not null references public.schools(id) on delete cascade,
+  student_id uuid not null references auth.users(id) on delete cascade,
+  goal text not null default '',
+  starting_level text not null default '',
+  current_level text not null default '',
+  updated_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (school_id, student_id)
+);
+
+create table public.student_internal_notes (
+  id uuid primary key default gen_random_uuid(),
+  school_id uuid not null references public.schools(id) on delete cascade,
+  student_id uuid not null references auth.users(id) on delete cascade,
+  author_id uuid references auth.users(id) on delete set null,
+  body text not null check (char_length(trim(body)) between 1 and 4000),
+  created_at timestamptz not null default now()
+);
+
 create table public.school_memberships (
   id uuid primary key default gen_random_uuid(),
   school_id uuid not null references public.schools(id) on delete cascade,
@@ -227,6 +250,7 @@ create index lessons_teacher_time_idx on public.lessons (teacher_id, starts_at);
 create index lesson_students_student_idx on public.lesson_students (student_id);
 create index wallet_student_idx on public.wallet_ledger (school_id, student_id, created_at desc);
 create index homework_students_student_idx on public.homework_students (student_id);
+create index student_internal_notes_student_idx on public.student_internal_notes (school_id, student_id, created_at desc);
 
 -- Role and ownership helpers used by the RLS policies below.
 create or replace function public.my_role(p_school_id uuid)
@@ -266,6 +290,20 @@ returns boolean
 language sql stable security definer set search_path = public
 as $$ select public.has_school_role(p_school_id, 'admin') $$;
 
+create or replace function public.can_manage_student_context(p_school_id uuid, p_student_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select public.is_school_admin(p_school_id)
+    or exists (
+      select 1 from public.teacher_students
+      where school_id = p_school_id
+        and teacher_id = auth.uid()
+        and student_id = p_student_id
+        and is_active
+    )
+$$;
+
 create or replace function public.is_lesson_teacher(p_lesson_id uuid)
 returns boolean
 language sql stable security definer set search_path = public
@@ -295,6 +333,8 @@ as $$
 $$;
 
 alter table public.profiles enable row level security;
+alter table public.student_internal_profiles enable row level security;
+alter table public.student_internal_notes enable row level security;
 alter table public.schools enable row level security;
 alter table public.school_memberships enable row level security;
 alter table public.registration_requests enable row level security;
@@ -325,6 +365,13 @@ create policy "profiles_read_own_or_related" on public.profiles for select to au
   )
 );
 create policy "profiles_update_own" on public.profiles for update to authenticated using (id = auth.uid()) with check (id = auth.uid());
+
+create policy "student_internal_profiles_manage" on public.student_internal_profiles for all to authenticated
+using (public.can_manage_student_context(school_id, student_id))
+with check (public.can_manage_student_context(school_id, student_id));
+create policy "student_internal_notes_manage" on public.student_internal_notes for all to authenticated
+using (public.can_manage_student_context(school_id, student_id))
+with check (public.can_manage_student_context(school_id, student_id));
 
 create policy "schools_read_member" on public.schools for select to authenticated using (public.is_school_member(id));
 create policy "schools_update_admin" on public.schools for update to authenticated using (public.is_school_admin(id));
@@ -728,8 +775,8 @@ $$;
 
 -- Private bucket. SQL does not store binary data.
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values ('portal-files', 'portal-files', false, 10485760, array['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'])
-on conflict (id) do update set public = false, file_size_limit = excluded.file_size_limit;
+values ('portal-files', 'portal-files', false, 52428800, array['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'audio/webm', 'audio/ogg', 'audio/mp4', 'audio/mpeg', 'audio/x-m4a', 'video/webm', 'video/mp4', 'video/quicktime'])
+on conflict (id) do update set public = false, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
 
 create policy "portal_files_read_related" on storage.objects for select to authenticated using (
   bucket_id = 'portal-files' and public.can_access_file(name)
