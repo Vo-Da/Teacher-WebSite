@@ -275,7 +275,7 @@
   }
 
   function brandMark() {
-    return `<div class="brand-mark horse-mark" role="img" aria-label="Емблема школи з лошадкою"><svg viewBox="0 0 48 48" aria-hidden="true"><path class="horse-head" d="M17 38c-4-7-4-15 1-21l-2-8 8 5c4-3 9-4 14-3l-4 7c3 3 4 8 2 12l-6 7-1 6h-9l1-5z"/><path class="horse-mane" d="M24 15c2-3 5-5 9-6l-2 7m-10 7c4-3 8-3 12-1m-5 9 6-4"/><circle cx="31" cy="20" r="1.7"/></svg></div>`;
+    return `<div class="brand-mark horse-mark" role="img" aria-label="Емблема школи з конем у стрибку"><svg viewBox="0 0 64 64" aria-hidden="true"><path class="horse-jump-line" d="M9 31c6-6 14-9 22-6 5 2 8 5 12 7 0-6 1-10 5-14l2-7 2 6 6 2-5 4c2 4 0 8-4 9l-6-1"/><path class="horse-jump-line" d="M14 30c-4-1-7-4-8-8m18 4c-2 5-6 8-11 9m16-4-9 14-8-1m17-11 5 14 8 4m-4-19 11 8 7-1m-18-7 2-8"/><path class="horse-jump-mane" d="M39 24c2 2 4 3 7 3m2-10 4 1m-27 9c4-1 8 0 11 3"/><circle class="horse-jump-eye" cx="51" cy="22" r="1.5"/></svg></div>`;
   }
 
   function shell(content) {

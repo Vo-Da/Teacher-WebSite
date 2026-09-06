@@ -90,24 +90,28 @@ a {
 }
 
 .horse-mark svg {
-  width: 31px;
-  height: 31px;
+  width: 34px;
+  height: 34px;
   overflow: visible;
 }
 
-.horse-head {
-  fill: currentColor;
+.horse-jump-line {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 4.3;
 }
 
-.horse-mane {
+.horse-jump-mane {
   fill: none;
   stroke: rgba(10, 83, 87, 0.78);
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 2.2;
+  stroke-width: 2.8;
 }
 
-.horse-mark circle {
+.horse-jump-eye {
   fill: #0a5357;
 }
 
