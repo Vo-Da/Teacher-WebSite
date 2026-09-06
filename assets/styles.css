@@ -89,6 +89,28 @@ a {
   box-shadow: 0 10px 26px rgba(15, 118, 110, 0.26);
 }
 
+.horse-mark svg {
+  width: 31px;
+  height: 31px;
+  overflow: visible;
+}
+
+.horse-head {
+  fill: currentColor;
+}
+
+.horse-mane {
+  fill: none;
+  stroke: rgba(10, 83, 87, 0.78);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.2;
+}
+
+.horse-mark circle {
+  fill: #0a5357;
+}
+
 .brand-title {
   font-size: 18px;
   font-weight: 800;

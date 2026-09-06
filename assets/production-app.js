@@ -205,7 +205,7 @@
     root.innerHTML = shell(`
       <section class="auth-shell">
         <div class="auth-card wide-card">
-          <div class="brand"><div class="brand-mark">TP</div><div><div class="brand-title">Teacher Portal</div><div class="brand-sub">Production setup</div></div></div>
+          <div class="brand">${brandMark()}<div><div class="brand-title">Teacher Portal</div><div class="brand-sub">Production setup</div></div></div>
           <h1>Потрібне підключення до Supabase</h1>
           <p class="muted">Вкажи URL і publishable/anon key нового staging-проєкту у файлі <code>assets/config.js</code>. Не додавай у браузер <code>service_role</code> key.</p>
           <div class="filebox"><strong>Порядок запуску:</strong><br>1. Запусти <code>supabase/production_schema.sql</code> у SQL Editor.<br>2. Вкажи конфігурацію.<br>3. Створи перший admin-акаунт через форму нижче.</div>
@@ -218,7 +218,7 @@
     root.innerHTML = shell(`
       <section class="auth-shell">
         <div class="auth-card wide-card">
-          <div class="brand"><div class="brand-mark">TP</div><div><div class="brand-title">${escape(config.schoolName || "Teacher Portal")}</div><div class="brand-sub">Кабінет школи</div></div></div>
+          <div class="brand">${brandMark()}<div><div class="brand-title">${escape(config.schoolName || "Teacher Portal")}</div><div class="brand-sub">Кабінет школи</div></div></div>
           ${renderNotice()}
           <div class="auth-columns">
             <form id="loginForm" class="stack card plain-card">
@@ -248,7 +248,7 @@
     root.innerHTML = shell(`
       <section class="auth-shell">
         <div class="auth-card wide-card">
-          <div class="brand"><div class="brand-mark">TP</div><div><div class="brand-title">Teacher Portal</div><div class="brand-sub">${escape(userName)}</div></div></div>
+          <div class="brand">${brandMark()}<div><div class="brand-title">Teacher Portal</div><div class="brand-sub">${escape(userName)}</div></div></div>
           ${renderNotice()}
           ${request ? `
             <h1>Заявка очікує підтвердження</h1>
@@ -272,6 +272,10 @@
 
   function renderFatal(message) {
     root.innerHTML = shell(`<section class="auth-shell"><div class="auth-card"><h1>Потрібна увага</h1><div class="msg error">${escape(message)}</div></div></section>`);
+  }
+
+  function brandMark() {
+    return `<div class="brand-mark horse-mark" role="img" aria-label="Емблема школи з лошадкою"><svg viewBox="0 0 48 48" aria-hidden="true"><path class="horse-head" d="M17 38c-4-7-4-15 1-21l-2-8 8 5c4-3 9-4 14-3l-4 7c3 3 4 8 2 12l-6 7-1 6h-9l1-5z"/><path class="horse-mane" d="M24 15c2-3 5-5 9-6l-2 7m-10 7c4-3 8-3 12-1m-5 9 6-4"/><circle cx="31" cy="20" r="1.7"/></svg></div>`;
   }
 
   function shell(content) {
@@ -721,7 +725,7 @@
       <section class="school-shell">
         <header class="school-header">
           <div class="container school-header-inner">
-            <div class="brand"><div class="brand-mark">TP</div><div><div class="brand-title">${escape(state.school.name)}</div><div class="brand-sub">${escape(modeTitle(role))} • ${escape(state.profile?.full_name || state.session.user.email)}</div></div></div>
+            <div class="brand">${brandMark()}<div><div class="brand-title">${escape(state.school.name)}</div><div class="brand-sub">${escape(modeTitle(role))} • ${escape(state.profile?.full_name || state.session.user.email)}</div></div></div>
             <div class="header-actions">${renderModeSwitcher(role)}<button type="button" class="btn small secondary" data-action="logout">Вийти</button></div>
           </div>
         </header>
