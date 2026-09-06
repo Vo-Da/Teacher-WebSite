@@ -129,6 +129,10 @@ p {
   color: var(--muted);
 }
 
+.field-optional {
+  font-weight: 500;
+}
+
 input,
 select,
 textarea,

@@ -118,6 +118,18 @@
         if (requestResult.error && requestResult.error.code !== "PGRST116") throw requestResult.error;
         if (bootstrapResult.error) throw bootstrapResult.error;
         state.canBootstrapSchool = bootstrapResult.data === true;
+        if (!requestResult.data && !state.canBootstrapSchool) {
+          const registration = storedRegistrationDetails();
+          if (registration) {
+            const { error: requestError } = await state.client.rpc("request_membership", {
+              p_full_name: registration.fullName,
+              p_requested_role: registration.requestedRole
+            });
+            if (requestError) throw requestError;
+            await refreshContext();
+            return;
+          }
+        }
         renderOnboarding(requestResult.data || null);
         return;
       }
@@ -220,8 +232,8 @@
               <div class="field"><label>Email</label><input name="email" type="email" required autocomplete="email" /></div>
               <div class="field"><label>Пароль</label><input name="password" type="password" minlength="8" required autocomplete="new-password" /></div>
               <div class="field"><label>Я реєструюся як</label><select name="requestedRole"><option value="student">Учень</option><option value="teacher">Викладач</option></select></div>
-              <button class="btn secondary" type="submit">Надіслати заявку</button>
-              <div class="meta">Після реєстрації доступ підтверджує адміністратор.</div>
+              <button class="btn secondary" type="submit">Створити заявку</button>
+              <div class="meta">Підтвердь email, і заявка з цими даними автоматично надійде адміністратору.</div>
             </form>
           </div>
         </div>
@@ -231,6 +243,7 @@
 
   function renderOnboarding(request) {
     const userName = state.session.user.email || "";
+    const registration = storedRegistrationDetails();
     root.innerHTML = shell(`
       <section class="auth-shell">
         <div class="auth-card wide-card">
@@ -241,19 +254,13 @@
             <p class="muted">Адміністратор має підтвердити роль: <strong>${request.requested_role === "teacher" ? "викладач" : "учень"}</strong>.</p>
           ` : `
             <div class="auth-columns ${state.canBootstrapSchool ? "" : "single-column"}">
-              <form id="requestMembershipForm" class="stack card plain-card">
-                <h2>Приєднатися до школи</h2>
-                <div class="field"><label>Ім’я та прізвище</label><input name="fullName" value="${escapeAttr(state.profile?.full_name || "")}" required /></div>
-                <div class="field"><label>Роль</label><select name="requestedRole"><option value="student">Учень</option><option value="teacher">Викладач</option></select></div>
-                <button class="btn primary" type="submit">Надіслати заявку</button>
-              </form>
               ${state.canBootstrapSchool ? `<form id="bootstrapSchoolForm" class="stack card plain-card">
                 <h2>Створити першу школу</h2>
                 <p class="muted">Це виконує лише перший власник нового Supabase-проєкту.</p>
                 <div class="field"><label>Назва школи</label><input name="schoolName" value="${escapeAttr(config.schoolName || "Моя школа")}" required /></div>
-                <div class="field"><label>Ім’я адміністратора</label><input name="fullName" value="${escapeAttr(state.profile?.full_name || "")}" required /></div>
+                <div class="field"><label>Ім’я адміністратора</label><input name="fullName" value="${escapeAttr(state.profile?.full_name || registration?.fullName || "")}" required /></div>
                 <button class="btn secondary" type="submit">Створити школу та admin-доступ</button>
-              </form>` : ""}
+              </form>` : `<div class="card plain-card"><h2>Не вдалося знайти дані заявки</h2><p class="muted">Увійди через сторінку реєстрації ще раз або звернися до адміністратора. Для нових акаунтів повторно заповнювати форму не потрібно.</p></div>`}
             </div>
           `}
           <button class="btn small secondary" type="button" data-action="logout">Вийти</button>
@@ -435,7 +442,10 @@
     const { data, error } = await state.client.auth.signUp({
       email,
       password,
-      options: { data: { full_name: fullName, requested_role: requestedRole } }
+      options: {
+        data: { full_name: fullName, requested_role: requestedRole },
+        emailRedirectTo: `${window.location.origin}${window.location.pathname}`
+      }
     });
     if (error) throw error;
     if (data.session) {
@@ -443,7 +453,7 @@
       if (requestError) throw requestError;
       state.notice = success("Заявку створено. Очікуй підтвердження адміністратора.");
     } else {
-      state.notice = success("Перевір email, підтверди адресу, потім увійди та надішли заявку.");
+      state.notice = success("Перевір email і підтверди адресу. Після переходу за посиланням заявка з уже введеними даними надійде адміністратору автоматично.");
       renderAuth();
     }
   }
@@ -522,12 +532,14 @@
 
   async function createLesson(form) {
     const studentIds = values(form, "studentIds");
+    const subjectId = value(form, "subjectId");
+    const typedTitle = value(form, "title");
     const startsAt = new Date(value(form, "startsAt"));
     const endsAt = new Date(value(form, "endsAt"));
     const { data, error } = await state.client.rpc("create_lesson", {
       p_school_id: state.school.id,
-      p_subject_id: value(form, "subjectId"),
-      p_title: value(form, "title"),
+      p_subject_id: subjectId,
+      p_title: typedTitle.length >= 2 ? typedTitle : `Заняття: ${subjectName(subjectId)}`,
       p_starts_at: startsAt.toISOString(),
       p_ends_at: endsAt.toISOString(),
       p_student_ids: studentIds,
@@ -909,7 +921,7 @@
     return `
       <form id="createLessonForm" class="stack">
         ${subjectSelect("subjectId", "Предмет", true)}
-        <div class="field"><label>Назва заняття</label><input name="title" placeholder="Наприклад, Підготовка до контрольної" required /></div>
+        <div class="field"><label>Назва заняття <span class="field-optional">(необов’язково)</span></label><input name="title" placeholder="Якщо лишити порожнім, буде назва предмета" /></div>
         <div class="two-fields"><div class="field"><label>Початок</label><input name="startsAt" type="datetime-local" value="${defaultStart}" required /></div><div class="field"><label>Кінець</label><input name="endsAt" type="datetime-local" value="${defaultEnd}" required /></div></div>
         ${selectField("studentIds", "Учні", students.map((student) => ({ user_id: student.id })), true, null, true)}
         <div class="field"><label>Посилання на зустріч</label><input name="meetingUrl" type="url" placeholder="https://..." /></div>
@@ -937,7 +949,7 @@
     const students = teacherStudents();
     return `
       <form id="createHomeworkForm" class="stack">
-        <div class="field"><label>Пов’язати із заняттям</label><select name="lessonId"><option value="">Без прив’язки</option>${state.data.lessons.filter((lesson) => lesson.teacher_id === state.session.user.id).map((lesson) => `<option value="${lesson.id}" ${selected?.id === lesson.id ? "selected" : ""}>${escape(formatDateTime(lesson.starts_at))} · ${escape(lesson.title)}</option>`).join("")}</select></div>
+        <div class="field"><label>Пов’язати із заняттям</label><select name="lessonId"><option value="">Без прив’язки</option>${state.data.lessons.filter((lesson) => lesson.teacher_id === state.session.user.id).map((lesson) => `<option value="${lesson.id}" ${selected?.id === lesson.id ? "selected" : ""}>${escape(homeworkLessonLabel(lesson))}</option>`).join("")}</select></div>
         <div class="field"><label>Назва</label><input name="title" required /></div><div class="field"><label>Опис</label><textarea name="description"></textarea></div><div class="field"><label>Дедлайн</label><input name="deadline" type="datetime-local" /></div>
         ${selected ? "" : selectField("studentIds", "Учні", students.map((student) => ({ user_id: student.id })), true, null, true)}
         ${renderVoiceCapture(`homework-${selected?.id || "new"}`, "Голосова інструкція")}
@@ -950,7 +962,7 @@
     const rows = tasks.flatMap((task) => homeworkStudents(task.id).map((recipient) => ({ task, recipient }))).filter((row) => row.recipient.status !== "not_started");
     return `<div class="list">${rows.length ? rows.map(({ task, recipient }) => {
       const submissions = submissionsFor(recipient.id);
-      return `<div class="item"><p class="item-title">${escape(task.title)} · ${escape(nameOf(recipient.student_id))}</p><div class="meta">Статус: ${submissionLabel(recipient.status)}${recipient.grade ? " · оцінка: " + escape(recipient.grade) : ""}</div>${submissions.map((submission) => `<div class="filebox"><div>${escape(submission.body || "Файли без тексту")}</div>${renderAttachments({ submission_id: submission.id })}</div>`).join("")}${recipient.teacher_comment ? `<div class="meta">Мій коментар: ${escape(recipient.teacher_comment)}</div>` : ""}<form id="feedbackForm" class="stack" style="margin-top:8px;"><input type="hidden" name="homeworkStudentId" value="${recipient.id}" /><div class="two-fields"><div class="field"><label>Статус</label><select name="status"><option value="reviewed">Перевірено</option><option value="needs_revision">На доопрацювання</option></select></div><div class="field"><label>Оцінка</label><input name="grade" placeholder="Наприклад, 11/12" value="${escapeAttr(recipient.grade || "")}" /></div></div><div class="field"><label>Коментар</label><textarea name="comment">${escape(recipient.teacher_comment || "")}</textarea></div><div class="field"><label>Виправлений файл</label><input name="files" type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.docx" /></div><button class="btn small secondary" type="submit">Надіслати зворотний зв’язок</button></form></div>`;
+      return `<div class="item"><p class="item-title">${escape(homeworkReviewLabel(task, recipient))}</p><div class="meta">Завдання: ${escape(task.title)} · статус: ${submissionLabel(recipient.status)}${recipient.grade ? " · оцінка: " + escape(recipient.grade) : ""}</div>${submissions.map((submission) => `<div class="filebox"><div>${escape(submission.body || "Файли без тексту")}</div>${renderAttachments({ submission_id: submission.id })}</div>`).join("")}${recipient.teacher_comment ? `<div class="meta">Мій коментар: ${escape(recipient.teacher_comment)}</div>` : ""}<form id="feedbackForm" class="stack" style="margin-top:8px;"><input type="hidden" name="homeworkStudentId" value="${recipient.id}" /><div class="two-fields"><div class="field"><label>Статус</label><select name="status"><option value="reviewed">Перевірено</option><option value="needs_revision">На доопрацювання</option></select></div><div class="field"><label>Оцінка</label><input name="grade" placeholder="Наприклад, 11/12" value="${escapeAttr(recipient.grade || "")}" /></div></div><div class="field"><label>Коментар</label><textarea name="comment">${escape(recipient.teacher_comment || "")}</textarea></div><div class="field"><label>Виправлений файл</label><input name="files" type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.docx" /></div><button class="btn small secondary" type="submit">Надіслати зворотний зв’язок</button></form></div>`;
     }).join("") : empty("Надісланих робіт ще немає.")}</div>`;
   }
 
@@ -1177,6 +1189,14 @@
     return String(new FormData(form).get(name) || "").trim();
   }
 
+  function storedRegistrationDetails() {
+    const metadata = state.session?.user?.user_metadata || {};
+    const fullName = String(metadata.full_name || "").trim();
+    const requestedRole = String(metadata.requested_role || "").trim();
+    if (fullName.length < 2 || !["student", "teacher"].includes(requestedRole)) return null;
+    return { fullName, requestedRole };
+  }
+
   function values(form, name) {
     return Array.from(form.querySelectorAll(`[name="${name}"] option:checked, input[name="${name}"]:checked`)).map((option) => option.value).filter(Boolean);
   }
@@ -1236,6 +1256,18 @@
 
   function homeworkById(id) {
     return state.data.homework.find((item) => item.id === id) || null;
+  }
+
+  function homeworkLessonLabel(lesson) {
+    const studentNames = lessonStudents(lesson.id).map((item) => nameOf(item.student_id)).join(", ") || "Без учня";
+    return `${formatDateTime(lesson.starts_at)} - ${subjectName(lesson.subject_id)} - ${studentNames}`;
+  }
+
+  function homeworkReviewLabel(task, recipient) {
+    const lesson = task.lesson_id ? lessonById(task.lesson_id) : null;
+    const date = lesson ? formatDateTime(lesson.starts_at) : formatDateTime(task.created_at);
+    const subject = lesson ? subjectName(lesson.subject_id) : "Без предмета";
+    return `${date} - ${subject} - ${nameOf(recipient.student_id)}`;
   }
 
   function selectedLesson() {
