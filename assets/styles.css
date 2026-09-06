@@ -90,29 +90,31 @@ a {
 }
 
 .horse-mark svg {
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   overflow: visible;
 }
 
-.horse-jump-line {
+.academy-shield {
   fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
+  stroke: rgba(255, 255, 255, 0.96);
   stroke-linejoin: round;
-  stroke-width: 4.3;
+  stroke-width: 3.4;
 }
 
-.horse-jump-mane {
-  fill: none;
-  stroke: rgba(10, 83, 87, 0.78);
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 2.8;
+.academy-horse {
+  fill: #fffdf6;
 }
 
-.horse-jump-eye {
-  fill: #0a5357;
+.academy-book {
+  fill: #e4b652;
+}
+
+.academy-book-line {
+  fill: none;
+  stroke: #0f766e;
+  stroke-linecap: round;
+  stroke-width: 1.6;
 }
 
 .brand-title {

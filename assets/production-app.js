@@ -275,7 +275,7 @@
   }
 
   function brandMark() {
-    return `<div class="brand-mark horse-mark" role="img" aria-label="Емблема школи з конем у стрибку"><svg viewBox="0 0 64 64" aria-hidden="true"><path class="horse-jump-line" d="M9 31c6-6 14-9 22-6 5 2 8 5 12 7 0-6 1-10 5-14l2-7 2 6 6 2-5 4c2 4 0 8-4 9l-6-1"/><path class="horse-jump-line" d="M14 30c-4-1-7-4-8-8m18 4c-2 5-6 8-11 9m16-4-9 14-8-1m17-11 5 14 8 4m-4-19 11 8 7-1m-18-7 2-8"/><path class="horse-jump-mane" d="M39 24c2 2 4 3 7 3m2-10 4 1m-27 9c4-1 8 0 11 3"/><circle class="horse-jump-eye" cx="51" cy="22" r="1.5"/></svg></div>`;
+    return `<div class="brand-mark horse-mark" role="img" aria-label="Емблема школи: кінь у стрибку та відкрита книга"><svg viewBox="0 0 64 64" aria-hidden="true"><path class="academy-shield" d="M10 8 32 3 54 8v21c0 15-9 25-22 32C19 54 10 44 10 29Z"/><path class="academy-horse" d="M12 31c4-5 10-7 16-5l6-3 3-8 3 4 5-2-2 5c5-1 8 2 7 5-1 3-5 4-8 2l-4 4c-4 4-10 5-15 2l-6 10-5-2 4-10-5-2z"/><path class="academy-horse" d="m37 33 10 6 6-2 2 3-8 4-11-6zm-12 3-5 9-5 3-2-3 4-5 3-8z"/><path class="academy-book" d="M17 51c5-2 10-1 14 2v7c-4-3-9-4-14-2zm30 0c-5-2-10-1-14 2v7c4-3 9-4 14-2z"/><path class="academy-book-line" d="M32 53v7"/></svg></div>`;
   }
 
   function shell(content) {
