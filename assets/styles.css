@@ -1081,6 +1081,28 @@ textarea:focus {
   display: grid;
 }
 
+.exercise-import-fields {
+  display: grid;
+  gap: 8px;
+}
+
+.exercise-import-fields.is-hidden {
+  display: none;
+}
+
+.exercise-import-preview:not(:empty) {
+  display: grid;
+  gap: 8px;
+}
+
+.exercise-import-list {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding-left: 22px;
+  color: var(--ink);
+}
+
 .exercise-kind-badge,
 .exercise-status {
   display: inline-flex;
@@ -1156,6 +1178,50 @@ textarea:focus {
 .exercise-option input {
   width: auto;
   margin: 0;
+}
+
+.homework-exercises {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.homework-exercises h3 {
+  margin: 0;
+}
+
+.exercise-homework {
+  display: grid;
+  gap: 8px;
+}
+
+.exercise-question-list {
+  display: grid;
+  gap: 12px;
+}
+
+.exercise-question {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fbfdff;
+}
+
+.exercise-question legend {
+  padding: 0 4px;
+  color: var(--ink);
+  font-weight: 750;
+}
+
+.exercise-question label {
+  display: grid;
+  gap: 8px;
+  color: var(--ink);
+  font-weight: 750;
 }
 
 .wordwall-box {

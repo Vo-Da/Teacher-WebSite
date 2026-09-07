@@ -17,7 +17,6 @@
     calendarOffset: 0,
     selectedLessonId: null,
     selectedHomeworkId: null,
-    selectedExerciseAssignmentId: null,
     selectedStudentId: null,
     recording: null,
     notice: null,
@@ -90,7 +89,6 @@
     state.data = emptyData();
     state.selectedLessonId = null;
     state.selectedHomeworkId = null;
-    state.selectedExerciseAssignmentId = null;
     state.selectedStudentId = null;
 
     if (!state.session) {
@@ -356,10 +354,8 @@
         renderDashboard();
         return;
       }
-      if (action === "select-exercise-assignment") {
-        const assignmentId = target.dataset.assignmentId || null;
-        state.selectedExerciseAssignmentId = state.selectedExerciseAssignmentId === assignmentId ? null : assignmentId;
-        renderDashboard();
+      if (action === "preview-exercise-import") {
+        previewExerciseImport(target.closest("form"));
         return;
       }
       if (action === "open-student-card") {
@@ -477,7 +473,6 @@
       if (form.id === "submitHomeworkForm") await submitHomework(form);
       if (form.id === "feedbackForm") await sendFeedback(form);
       if (form.id === "createExerciseTemplateForm") await createExerciseTemplate(form);
-      if (form.id === "assignExerciseForm") await assignExercise(form);
       if (form.id === "submitExerciseForm") await submitExercise(form);
       if (form.id === "studentInternalCardForm") await saveStudentInternalCard(form);
       if (form.id === "adminCreateUserForm") await createAdminUser(form);
@@ -636,6 +631,7 @@
     const lessonId = value(form, "lessonId") || null;
     const selectedLesson = lessonId ? lessonById(lessonId) : null;
     const studentIds = selectedLesson ? lessonStudents(selectedLesson.id).map((row) => row.student_id) : values(form, "studentIds");
+    const exerciseTemplateIds = values(form, "exerciseTemplateIds");
     if (!studentIds.length) throw new Error("Обери заняття або хоча б одного учня для домашнього завдання.");
     const { data, error } = await state.client.rpc("create_homework", {
       p_school_id: state.school.id,
@@ -646,8 +642,9 @@
       p_student_ids: studentIds
     });
     if (error) throw error;
+    await attachExercisesToHomework(data, exerciseTemplateIds);
     await uploadInputFiles(form, { homework_id: data });
-    state.notice = success("Домашнє завдання опубліковано.");
+    state.notice = success(exerciseTemplateIds.length ? "Домашнє завдання та вправи опубліковано." : "Домашнє завдання опубліковано.");
     await refreshContext();
   }
 
@@ -705,20 +702,9 @@
     let content = {};
     let answerData = {};
     if (kind === "multiple_choice") {
-      const options = ["a", "b", "c", "d"]
-        .map((id) => ({ id, text: value(form, `option-${id}`) }))
-        .filter((option) => option.text);
-      const correctOptionId = value(form, "correctOptionId");
-      if (options.length < 2 || !options.some((option) => option.id === correctOptionId)) {
-        throw new Error("Додай щонайменше два варіанти та познач правильний.");
-      }
-      content = { options };
-      answerData = { correctOptionId };
+      ({ content, answerData } = buildImportedExercise(value(form, "importRows"), kind));
     } else if (kind === "fill_blank") {
-      const acceptedAnswers = value(form, "acceptedAnswers").split(",").map((answer) => answer.trim()).filter(Boolean);
-      if (!acceptedAnswers.length) throw new Error("Додай хоча б один правильний варіант відповіді.");
-      content = {};
-      answerData = { acceptedAnswers };
+      ({ content, answerData } = buildImportedExercise(value(form, "importRows"), kind));
     } else if (kind === "wordwall") {
       content = { url: wordwallUrl(value(form, "wordwallUrl")) };
     } else {
@@ -738,32 +724,30 @@
     await refreshContext();
   }
 
-  async function assignExercise(form) {
-    const studentIds = values(form, "studentIds");
-    if (!studentIds.length) throw new Error("Обери хоча б одного учня для вправи.");
-    const { error } = await state.client.rpc("create_exercise_assignment", {
-      p_school_id: state.school.id,
-      p_template_id: value(form, "templateId"),
-      p_student_ids: studentIds,
-      p_deadline_at: value(form, "deadline") ? new Date(value(form, "deadline")).toISOString() : null
-    });
-    if (error) throw error;
-    state.notice = success("Вправу призначено учням.");
-    await refreshContext();
+  async function attachExercisesToHomework(homeworkId, templateIds) {
+    for (const templateId of templateIds) {
+      const { error } = await state.client.rpc("create_homework_exercise_assignment", {
+        p_school_id: state.school.id,
+        p_template_id: templateId,
+        p_homework_id: homeworkId
+      });
+      if (error) throw error;
+    }
   }
 
   async function submitExercise(form) {
     const kind = value(form, "kind");
-    const answer = value(form, "answer");
-    if (kind !== "wordwall" && !answer) throw new Error("Дай відповідь перед перевіркою.");
-    const { data, error } = await state.client.rpc("submit_exercise_attempt", {
-      p_assignment_student_id: value(form, "assignmentStudentId"),
-      p_answers: kind === "wordwall" ? {} : { answer }
+    const assignmentStudentId = value(form, "assignmentStudentId");
+    const answers = kind === "wordwall" ? {} : exerciseAnswers(form);
+    if (kind !== "wordwall" && !Object.keys(answers).length) throw new Error("Дай відповіді перед перевіркою.");
+    const { data, error: submitError } = await state.client.rpc("submit_exercise_attempt", {
+      p_assignment_student_id: assignmentStudentId,
+      p_answers: answers
     });
-    if (error) throw error;
+    if (submitError) throw submitError;
     state.notice = kind === "wordwall"
       ? success("Позначку про виконання надіслано викладачу.")
-      : success(`Перевірено: ${data?.score || 0}/${data?.total || 1}. Можна спробувати ще раз.`);
+      : success(`Перевірено: ${data?.score || 0}/${data?.total || 0}. Можна спробувати ще раз.`);
     await refreshContext();
   }
 
@@ -877,7 +861,7 @@
       ? [["overview", "Огляд"], ["people", "Люди"], ["subjects", "Предмети і тарифи"], ["payments", "Оплати"], ["finance", "Фінанси"]]
       : role === "teacher"
         ? [["calendar", "Календар"], ["students", "Мої учні"], ["homework", "Домашні"], ["exercises", "Вправи"]]
-        : [["today", "Сьогодні"], ["calendar", "Календар"], ["homework", "Домашні"], ["exercises", "Вправи"]];
+        : [["today", "Сьогодні"], ["calendar", "Календар"], ["homework", "Домашні"]];
   }
 
   function renderAdminView() {
@@ -1026,8 +1010,8 @@
     const templates = state.data.exerciseTemplates.filter((template) => template.teacher_id === state.session.user.id && template.is_active);
     const recipients = teacherExerciseRecipients();
     return `
-      <div class="page-heading"><div><p class="eyebrow">Практика</p><h1>Вправи</h1><p class="muted">Створи вправу один раз, признач учням і переглядай результат кожної спроби.</p></div></div>
-      <div class="work-grid"><div class="card"><h2>Нова вправа</h2>${renderExerciseTemplateForm()}</div><div class="card"><h2>Призначити учням</h2>${renderExerciseAssignmentForm(templates)}</div></div>
+      <div class="page-heading"><div><p class="eyebrow">Практика</p><h1>Вправи</h1><p class="muted">Створи набір до 30 завдань, а потім додай його до домашнього завдання.</p></div></div>
+      <div class="work-grid"><div class="card"><h2>Нова вправа</h2>${renderExerciseTemplateForm()}</div><div class="card"><h2>Як це працює</h2><div class="process-note"><strong>1.</strong> Встав до 30 рядків із таблиці.<br><strong>2.</strong> Перевір попередній перегляд та збережи вправу.<br><strong>3.</strong> У «Домашніх» вибери її з бібліотеки.<br><strong>4.</strong> Учень виконає вправу всередині домашнього.</div></div></div>
       <div class="card"><h2>Бібліотека вправ</h2>${renderExerciseLibrary(templates)}</div>
       <div class="card"><h2>Прогрес учнів</h2>${renderTeacherExerciseProgress(recipients)}</div>
     `;
@@ -1039,30 +1023,17 @@
         <div class="field"><label>Тип вправи</label><select name="exerciseKind"><option value="multiple_choice">Вибрати правильний варіант</option><option value="fill_blank">Вставити пропущене слово</option><option value="wordwall">Wordwall</option></select></div>
         <div class="field"><label>Назва вправи</label><input name="title" placeholder="Наприклад, Present Simple: повторення" /></div>
         <div class="field"><label>Текст / інструкція <span class="field-optional">(необов’язково)</span></label><textarea name="prompt" placeholder="Напиши запитання, речення з пропуском або коротку інструкцію."></textarea></div>
-        <div class="exercise-kind-fields is-visible" data-exercise-kind-fields="multiple_choice"><div class="field"><label>Варіант 1</label><input name="option-a" /></div><div class="field"><label>Варіант 2</label><input name="option-b" /></div><div class="field"><label>Варіант 3 <span class="field-optional">(необов’язково)</span></label><input name="option-c" /></div><div class="field"><label>Варіант 4 <span class="field-optional">(необов’язково)</span></label><input name="option-d" /></div><div class="field"><label>Правильний варіант</label><select name="correctOptionId"><option value="">Обери варіант</option><option value="a">Варіант 1</option><option value="b">Варіант 2</option><option value="c">Варіант 3</option><option value="d">Варіант 4</option></select></div></div>
-        <div class="exercise-kind-fields" data-exercise-kind-fields="fill_blank"><div class="field"><label>Правильні відповіді</label><input name="acceptedAnswers" placeholder="Наприклад: goes, go" /><div class="meta">Якщо допустимі кілька відповідей, розділи їх комою.</div></div></div>
+        <div class="exercise-import-fields" data-exercise-import-fields><div class="field"><label>Рядки вправи</label><textarea name="importRows" rows="10" placeholder="She ___ to school. / go;goes;going;gone / goes"></textarea></div><button class="btn small secondary" type="button" data-action="preview-exercise-import">Перевірити рядки</button><div class="exercise-import-preview" data-exercise-import-preview></div></div>
+        <div class="exercise-kind-fields is-visible" data-exercise-kind-fields="multiple_choice"><div class="filebox"><strong>Формат для вибору варіанту</strong><br><code>Речення / варіант 1;варіант 2;... / правильний варіант</code><br><span class="meta">Кожен рядок - окреме завдання. Максимум 30 рядків.</span></div></div>
+        <div class="exercise-kind-fields" data-exercise-kind-fields="fill_blank"><div class="filebox"><strong>Формат для пропуску</strong><br><code>Речення /  / правильна відповідь;допустима відповідь</code><br><span class="meta">Середня колонка лишається порожньою. Максимум 30 рядків.</span></div></div>
         <div class="exercise-kind-fields" data-exercise-kind-fields="wordwall"><div class="field"><label>Посилання на Wordwall</label><input name="wordwallUrl" type="url" placeholder="https://wordwall.net/..." /><div class="meta">Учень відкриє вправу в Wordwall, а результат перевіриш у своєму кабінеті Wordwall.</div></div></div>
         <button class="btn primary" type="submit">Додати до бібліотеки</button>
       </form>
     `;
   }
 
-  function renderExerciseAssignmentForm(templates) {
-    const students = teacherStudents();
-    if (!templates.length) return empty("Спершу створи хоча б одну вправу в бібліотеці.");
-    if (!students.length) return empty("Адміністратор ще не призначив тобі учнів.");
-    return `
-      <form id="assignExerciseForm" class="stack">
-        <div class="field"><label>Вправа</label><select name="templateId" required>${templates.map((template) => `<option value="${template.id}">${escape(template.title)} · ${escape(exerciseKindLabel(template.kind))}</option>`).join("")}</select></div>
-        ${selectField("studentIds", "Учні", students.map((student) => ({ user_id: student.id })), true, null, true)}
-        <div class="field"><label>Дедлайн <span class="field-optional">(необов’язково)</span></label><input name="deadline" type="datetime-local" /></div>
-        <button class="btn primary" type="submit">Призначити вправу</button>
-      </form>
-    `;
-  }
-
   function renderExerciseLibrary(templates) {
-    return `<div class="list">${templates.length ? templates.map((template) => `<div class="item"><div><p class="item-title">${escape(template.title)}</p><div class="meta">${escape(exerciseKindLabel(template.kind))} · створено ${escape(formatDateTime(template.created_at))}</div>${template.prompt ? `<div class="exercise-prompt">${escape(template.prompt)}</div>` : ""}${template.kind === "wordwall" && safeWordwallUrl(template.content?.url) ? `<a class="exercise-link" href="${escapeAttr(safeWordwallUrl(template.content?.url))}" target="_blank" rel="noopener">Відкрити Wordwall</a>` : ""}</div><span class="exercise-kind-badge">${escape(exerciseKindLabel(template.kind))}</span></div>`).join("") : empty("Бібліотека ще порожня.")}</div>`;
+    return `<div class="list">${templates.length ? templates.map((template) => `<div class="item"><div><p class="item-title">${escape(template.title)}</p><div class="meta">${escape(exerciseKindLabel(template.kind))} · ${template.kind === "wordwall" ? "зовнішня вправа" : `${exerciseItems(template).length} завдань`} · створено ${escape(formatDateTime(template.created_at))}</div>${template.prompt ? `<div class="exercise-prompt">${escape(template.prompt)}</div>` : ""}${template.kind === "wordwall" && safeWordwallUrl(template.content?.url) ? `<a class="exercise-link" href="${escapeAttr(safeWordwallUrl(template.content?.url))}" target="_blank" rel="noopener">Відкрити Wordwall</a>` : ""}</div><span class="exercise-kind-badge">${escape(exerciseKindLabel(template.kind))}</span></div>`).join("") : empty("Бібліотека ще порожня.")}</div>`;
   }
 
   function renderTeacherExerciseProgress(recipients) {
@@ -1071,14 +1042,13 @@
       const template = assignment ? exerciseTemplateById(assignment.template_id) : null;
       if (!assignment || !template) return "";
       const score = recipient.best_score === null || recipient.best_score === undefined ? "Без автоматичної оцінки" : `${recipient.best_score}/${recipient.total_score || 1}`;
-      return `<div class="item"><div><p class="item-title">${escape(template.title)} · ${escape(nameOf(recipient.student_id))}</p><div class="meta">${escape(exerciseKindLabel(template.kind))} · ${assignment.deadline_at ? "дедлайн: " + escape(formatDateTime(assignment.deadline_at)) : "без дедлайну"}</div><div class="meta">Спроб: ${recipient.attempts_count} · ${score}</div></div><div class="item-actions">${exerciseStatusBadge(recipient.status)}${template.kind === "wordwall" && recipient.status === "submitted" ? `<button class="btn small secondary" type="button" data-action="review-wordwall-exercise" data-assignment-student-id="${recipient.id}">Підтвердити</button>` : ""}</div></div>`;
+      return `<div class="item"><div><p class="item-title">${escape(template.title)} · ${escape(nameOf(recipient.student_id))}</p><div class="meta">${escape(exerciseKindLabel(template.kind))} · домашнє: ${escape(homeworkLabelForExercise(assignment.homework_id))}</div><div class="meta">Спроб: ${recipient.attempts_count} · ${score}</div></div><div class="item-actions">${exerciseStatusBadge(recipient.status)}${template.kind === "wordwall" && recipient.status === "submitted" ? `<button class="btn small secondary" type="button" data-action="review-wordwall-exercise" data-assignment-student-id="${recipient.id}">Підтвердити</button>` : ""}</div></div>`;
     }).join("") : empty("Ще немає призначених вправ.")}</div>`;
   }
 
   function renderStudentView() {
     if (state.activeView === "calendar") return renderStudentCalendar();
     if (state.activeView === "homework") return renderStudentHomework();
-    if (state.activeView === "exercises") return renderStudentExercises();
     return renderStudentToday();
   }
 
@@ -1113,40 +1083,6 @@
     `;
   }
 
-  function renderStudentExercises() {
-    const recipients = myExerciseRecipients();
-    const selected = recipients.find((recipient) => recipient.assignment_id === state.selectedExerciseAssignmentId) || null;
-    return `
-      <div class="page-heading"><div><p class="eyebrow">Практика</p><h1>Мої вправи</h1><p class="muted">Виконуй вправи, одразу бач результат і повторюй спробу, якщо потрібно.</p></div></div>
-      <div class="exercise-layout"><div class="card"><h2>Призначені вправи</h2><div class="list">${recipients.length ? recipients.map((recipient) => {
-        const assignment = exerciseAssignmentById(recipient.assignment_id);
-        const template = assignment ? exerciseTemplateById(assignment.template_id) : null;
-        if (!assignment || !template) return "";
-        return `<button class="lesson-card exercise-assignment-card ${selected?.id === recipient.id ? "active" : ""}" type="button" data-action="select-exercise-assignment" data-assignment-id="${assignment.id}"><div class="lesson-card-head"><strong>${escape(template.title)}</strong>${exerciseStatusBadge(recipient.status)}</div><div class="meta">${escape(exerciseKindLabel(template.kind))} · ${assignment.deadline_at ? "дедлайн: " + escape(formatDateTime(assignment.deadline_at)) : "без дедлайну"}</div></button>`;
-      }).join("") : empty("Викладач ще не призначив вправ.")}</div></div><div class="card"><h2>Виконання</h2>${selected ? renderStudentExercisePanel(selected) : empty("Обери вправу зі списку, щоб почати.")}</div></div>
-    `;
-  }
-
-  function renderStudentExercisePanel(recipient) {
-    const assignment = exerciseAssignmentById(recipient.assignment_id);
-    const template = assignment ? exerciseTemplateById(assignment.template_id) : null;
-    if (!assignment || !template) return empty("Вправу більше не знайдено.");
-    const attemptInfo = recipient.attempts_count ? `<div class="meta">Спроб: ${recipient.attempts_count}${recipient.best_score === null || recipient.best_score === undefined ? "" : ` · найкращий результат: ${recipient.best_score}/${recipient.total_score || 1}`}</div>` : "";
-    const prompt = template.prompt ? `<div class="exercise-prompt">${escape(template.prompt)}</div>` : "";
-    const hidden = `<input type="hidden" name="assignmentStudentId" value="${recipient.id}" /><input type="hidden" name="kind" value="${escapeAttr(template.kind)}" />`;
-    if (template.kind === "multiple_choice") {
-      const options = exerciseOptions(template);
-      return `${prompt}${attemptInfo}<form id="submitExerciseForm" class="stack" style="margin-top:12px;">${hidden}<div class="exercise-options">${options.map((option) => `<label class="exercise-option"><input type="radio" name="answer" value="${escapeAttr(option.id)}" required />${escape(option.text)}</label>`).join("")}</div><button class="btn primary" type="submit">Перевірити</button></form>`;
-    }
-    if (template.kind === "fill_blank") {
-      return `${prompt}${attemptInfo}<form id="submitExerciseForm" class="stack" style="margin-top:12px;">${hidden}<div class="field"><label>Твоя відповідь</label><input name="answer" required autocomplete="off" /></div><button class="btn primary" type="submit">Перевірити</button></form>`;
-    }
-    if (template.kind === "wordwall") {
-      const url = safeWordwallUrl(template.content?.url);
-      return `${prompt}${attemptInfo}<div class="wordwall-box"><strong>Вправа Wordwall</strong><p>Відкрий вправу в новій вкладці. Після завершення повернися сюди й надішли позначку викладачу.</p>${url ? `<a class="btn secondary" href="${escapeAttr(url)}" target="_blank" rel="noopener">Відкрити Wordwall</a>` : '<div class="msg error">Посилання на Wordwall недоступне.</div>'}</div><form id="submitExerciseForm" class="stack" style="margin-top:12px;">${hidden}<button class="btn primary" type="submit">Я виконав/ла вправу</button></form>`;
-    }
-    return empty("Цей тип вправи ще не підтримується.");
-  }
 
   function renderLessonForm(students) {
     const defaultStart = dateTimeLocal(state.selectedDate, "15:00");
@@ -1194,11 +1130,13 @@
 
   function renderHomeworkForm(selected) {
     const students = teacherStudents();
+    const templates = state.data.exerciseTemplates.filter((template) => template.teacher_id === state.session.user.id && template.is_active);
     return `
       <form id="createHomeworkForm" class="stack">
         <div class="field"><label>Пов’язати із заняттям <span class="field-optional">(необов’язково)</span></label><select name="lessonId"><option value="">Без прив’язки</option>${state.data.lessons.filter((lesson) => lesson.teacher_id === state.session.user.id).map((lesson) => `<option value="${lesson.id}" ${selected?.id === lesson.id ? "selected" : ""}>${escape(homeworkLessonLabel(lesson))}</option>`).join("")}</select></div>
         <div class="field"><label>Текст <span class="field-optional">(необов’язково)</span></label><textarea name="description" placeholder="Напиши інструкцію або залиш поле порожнім, якщо додаси файл чи запис."></textarea></div><div class="field"><label>Дедлайн <span class="field-optional">(необов’язково)</span></label><input name="deadline" type="datetime-local" /></div>
         ${selectField("studentIds", "Учні (лише якщо без заняття)", students.map((student) => ({ user_id: student.id })), false, null, true)}
+        ${templates.length ? `<div class="filebox stack"><strong>Вправи з бібліотеки <span class="field-optional">(необов’язково)</span></strong><select name="exerciseTemplateIds" multiple size="4">${templates.map((template) => `<option value="${template.id}">${escape(template.title)} · ${escape(exerciseKindLabel(template.kind))}</option>`).join("")}</select><div class="meta">Обрані вправи з’являться в цьому домашньому для кожного учня.</div></div>` : ""}
         ${renderVoiceCapture(`homework-${selected?.id || "new"}`, "Голосова інструкція")}${renderVideoCapture(`homework-video-${selected?.id || "new"}`, "Відеоінструкція")}
         <div class="field"><label>Вкладення <span class="field-optional">(необов’язково)</span></label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn primary" type="submit">Опублікувати</button>
       </form>
@@ -1218,8 +1156,45 @@
     if (!task) return "";
     const submissions = submissionsFor(recipient.id);
     return `
-      <article class="card homework-card"><div class="item-head"><div><p class="eyebrow">${task.deadline_at ? "Дедлайн: " + escape(formatDateTime(task.deadline_at)) : "Без дедлайну"}</p><h2>Домашнє завдання</h2></div>${submissionBadge(recipient.status)}</div><div class="homework-text"><strong>Текст</strong><p>${escape(task.description || "Текст не додано.")}</p></div>${renderAttachments({ homework_id: task.id })}${recipient.teacher_comment ? `<div class="feedback-box"><strong>Коментар викладача</strong><div>${escape(recipient.teacher_comment)}</div>${recipient.grade ? `<div>Оцінка: ${escape(recipient.grade)}</div>` : ""}${renderAttachments({ homework_student_id: recipient.id })}</div>` : ""}${submissions.length ? `<div class="filebox"><strong>Мої відповіді</strong>${submissions.map((submission) => `<div class="meta">${escape(formatDateTime(submission.submitted_at))}: ${escape(submission.body || "Файли")}${renderAttachments({ submission_id: submission.id })}</div>`).join("")}</div>` : ""}<form id="submitHomeworkForm" class="stack" style="margin-top:12px;"><input type="hidden" name="homeworkStudentId" value="${recipient.id}" /><div class="field"><label>Моя відповідь <span class="field-optional">(необов’язково)</span></label><textarea name="body" placeholder="Опиши розв’язання або додай посилання"></textarea></div>${renderVoiceCapture(`submission-${recipient.id}`, "Голосова відповідь")}${renderVideoCapture(`submission-video-${recipient.id}`, "Відеовідповідь")}<div class="field"><label>Файли відповіді <span class="field-optional">(необов’язково)</span></label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn primary" type="submit">Надіслати відповідь</button></form></article>
+      <article class="card homework-card">
+        <div class="item-head"><div><p class="eyebrow">${task.deadline_at ? "Дедлайн: " + escape(formatDateTime(task.deadline_at)) : "Без дедлайну"}</p><h2>Домашнє завдання</h2></div>${submissionBadge(recipient.status)}</div>
+        <div class="homework-text"><strong>Текст</strong><p>${escape(task.description || "Текст не додано.")}</p></div>
+        ${renderAttachments({ homework_id: task.id })}
+        ${renderHomeworkExercises(recipient)}
+        ${recipient.teacher_comment ? `<div class="feedback-box"><strong>Коментар викладача</strong><div>${escape(recipient.teacher_comment)}</div>${recipient.grade ? `<div>Оцінка: ${escape(recipient.grade)}</div>` : ""}${renderAttachments({ homework_student_id: recipient.id })}</div>` : ""}
+        ${submissions.length ? `<div class="filebox"><strong>Мої відповіді</strong>${submissions.map((submission) => `<div class="meta">${escape(formatDateTime(submission.submitted_at))}: ${escape(submission.body || "Файли")}${renderAttachments({ submission_id: submission.id })}</div>`).join("")}</div>` : ""}
+        <form id="submitHomeworkForm" class="stack" style="margin-top:12px;"><input type="hidden" name="homeworkStudentId" value="${recipient.id}" /><div class="field"><label>Моя відповідь <span class="field-optional">(необов’язково)</span></label><textarea name="body" placeholder="Опиши розв’язання або додай посилання"></textarea></div>${renderVoiceCapture(`submission-${recipient.id}`, "Голосова відповідь")}${renderVideoCapture(`submission-video-${recipient.id}`, "Відеовідповідь")}<div class="field"><label>Файли відповіді <span class="field-optional">(необов’язково)</span></label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn primary" type="submit">Надіслати відповідь</button></form>
+      </article>
     `;
+  }
+
+  function renderHomeworkExercises(homeworkRecipient) {
+    const recipients = state.data.exerciseAssignmentStudents.filter((recipient) => recipient.homework_student_id === homeworkRecipient.id);
+    if (!recipients.length) return "";
+    return `<section class="homework-exercises"><h3>Вправи</h3>${recipients.map((recipient) => renderHomeworkExercise(recipient)).join("")}</section>`;
+  }
+
+  function renderHomeworkExercise(recipient) {
+    const assignment = exerciseAssignmentById(recipient.assignment_id);
+    const template = assignment ? exerciseTemplateById(assignment.template_id) : null;
+    if (!assignment || !template) return "";
+    const attemptInfo = recipient.attempts_count ? `<div class="meta">Спроб: ${recipient.attempts_count}${recipient.best_score === null || recipient.best_score === undefined ? "" : ` · найкращий результат: ${recipient.best_score}/${recipient.total_score || 0}`}</div>` : "";
+    const prompt = template.prompt ? `<div class="exercise-prompt">${escape(template.prompt)}</div>` : "";
+    const hidden = `<input type="hidden" name="assignmentStudentId" value="${recipient.id}" /><input type="hidden" name="kind" value="${escapeAttr(template.kind)}" />`;
+    if (template.kind === "wordwall") {
+      const url = safeWordwallUrl(template.content?.url);
+      return `<div class="filebox exercise-homework"><div class="item-head"><strong>${escape(template.title)}</strong>${exerciseStatusBadge(recipient.status)}</div>${prompt}${attemptInfo}<div class="wordwall-box"><p>Відкрий вправу в новій вкладці, а після завершення повернися сюди.</p>${url ? `<a class="btn secondary" href="${escapeAttr(url)}" target="_blank" rel="noopener">Відкрити Wordwall</a>` : '<div class="msg error">Посилання на Wordwall недоступне.</div>'}</div><form id="submitExerciseForm" class="stack" style="margin-top:12px;">${hidden}<button class="btn primary" type="submit">Я виконав/ла вправу</button></form></div>`;
+    }
+    const items = exerciseItems(template);
+    return `<div class="filebox exercise-homework"><div class="item-head"><strong>${escape(template.title)}</strong>${exerciseStatusBadge(recipient.status)}</div>${prompt}${attemptInfo}<form id="submitExerciseForm" class="stack" style="margin-top:12px;">${hidden}<div class="exercise-question-list">${items.map((item, index) => renderExerciseQuestion(item, template.kind, index + 1)).join("")}</div><button class="btn primary" type="submit">Перевірити всі відповіді</button></form></div>`;
+  }
+
+  function renderExerciseQuestion(item, kind, number) {
+    if (kind === "multiple_choice") {
+      const options = Array.isArray(item.options) ? item.options : [];
+      return `<fieldset class="exercise-question"><legend>${number}. ${escape(item.prompt)}</legend><div class="exercise-options">${options.map((option) => `<label class="exercise-option"><input type="radio" name="answer-${escapeAttr(item.id)}" value="${escapeAttr(option.id)}" />${escape(option.text)}</label>`).join("")}</div></fieldset>`;
+    }
+    return `<div class="exercise-question"><label>${number}. ${escape(item.prompt)}<input name="answer-${escapeAttr(item.id)}" autocomplete="off" /></label></div>`;
   }
 
   function renderLessonFeed(lessons) {
@@ -1576,10 +1551,6 @@
     return state.data.homeworkStudents.filter((item) => ownHomework.has(item.homework_id));
   }
 
-  function myExerciseRecipients() {
-    return state.data.exerciseAssignmentStudents.filter((recipient) => recipient.student_id === state.session.user.id);
-  }
-
   function teacherExerciseRecipients() {
     const ownAssignments = new Set(state.data.exerciseAssignments.filter((assignment) => assignment.teacher_id === state.session.user.id).map((assignment) => assignment.id));
     return state.data.exerciseAssignmentStudents.filter((recipient) => ownAssignments.has(recipient.assignment_id));
@@ -1593,9 +1564,88 @@
     return state.data.exerciseTemplates.find((template) => template.id === id) || null;
   }
 
-  function exerciseOptions(template) {
-    const options = Array.isArray(template?.content?.options) ? template.content.options : [];
-    return options.filter((option) => option && typeof option.id === "string" && typeof option.text === "string" && option.text.trim());
+  function exerciseItems(template) {
+    const items = Array.isArray(template?.content?.items) ? template.content.items : [];
+    return items.filter((item) => item && typeof item.id === "string" && typeof item.prompt === "string" && item.prompt.trim());
+  }
+
+  function parseImportedExerciseRows(rawRows, kind) {
+    const rows = String(rawRows || "").split(/\r?\n/).map((row) => row.trim()).filter(Boolean);
+    if (!rows.length) throw new Error("Додай хоча б один рядок вправи.");
+    if (rows.length > 30) throw new Error("В одній вправі може бути щонайбільше 30 рядків.");
+
+    return rows.map((row, index) => {
+      const rowNumber = index + 1;
+      const columns = row.split("/").map((column) => column.trim());
+      if (columns.length !== 3) throw new Error(`Рядок ${rowNumber}: потрібні рівно три колонки, розділені символом /.`);
+      const [prompt, optionsValue, answersValue] = columns;
+      const acceptedAnswers = answersValue.split(";").map((answer) => answer.trim()).filter(Boolean);
+      if (!prompt) throw new Error(`Рядок ${rowNumber}: додай речення або запитання.`);
+      if (!acceptedAnswers.length) throw new Error(`Рядок ${rowNumber}: додай правильну відповідь у третій колонці.`);
+
+      const itemId = `q${rowNumber}`;
+      if (kind === "multiple_choice") {
+        const optionTexts = optionsValue.split(";").map((option) => option.trim()).filter(Boolean);
+        if (optionTexts.length < 2) throw new Error(`Рядок ${rowNumber}: для вибору варіанту потрібно щонайменше дві відповіді.`);
+        if (acceptedAnswers.length !== 1) throw new Error(`Рядок ${rowNumber}: для вибору варіанту вкажи одну правильну відповідь.`);
+        const correctIndex = optionTexts.findIndex((option) => normalizedExerciseAnswer(option) === normalizedExerciseAnswer(acceptedAnswers[0]));
+        if (correctIndex < 0) throw new Error(`Рядок ${rowNumber}: правильна відповідь має збігатися з одним із варіантів.`);
+        const options = optionTexts.map((text, optionIndex) => ({ id: `${itemId}-o${optionIndex + 1}`, text }));
+        return { id: itemId, prompt, options, acceptedAnswers: [options[correctIndex].id] };
+      }
+
+      if (kind === "fill_blank") {
+        if (optionsValue) throw new Error(`Рядок ${rowNumber}: для пропущеного слова середня колонка має бути порожньою.`);
+        return { id: itemId, prompt, acceptedAnswers };
+      }
+
+      throw new Error("Цей формат доступний лише для вправ з автоматичною перевіркою.");
+    });
+  }
+
+  function buildImportedExercise(rawRows, kind) {
+    const rows = parseImportedExerciseRows(rawRows, kind);
+    if (kind === "multiple_choice") {
+      return {
+        content: { items: rows.map(({ id, prompt, options }) => ({ id, prompt, options })) },
+        answerData: { items: rows.map(({ id, acceptedAnswers }) => ({ id, correctOptionId: acceptedAnswers[0] })) }
+      };
+    }
+    return {
+      content: { items: rows.map(({ id, prompt }) => ({ id, prompt })) },
+      answerData: { items: rows.map(({ id, acceptedAnswers }) => ({ id, acceptedAnswers })) }
+    };
+  }
+
+  function previewExerciseImport(form) {
+    const preview = form?.querySelector("[data-exercise-import-preview]");
+    if (!preview) return;
+    try {
+      const rows = parseImportedExerciseRows(value(form, "importRows"), value(form, "exerciseKind"));
+      preview.innerHTML = `<div class="msg success">Готово: у вправі ${rows.length} завдань.</div><ol class="exercise-import-list">${rows.map((row) => `<li>${escape(row.prompt)} <span class="meta">${row.options ? `· ${row.options.length} варіанти` : `· ${row.acceptedAnswers.length} допустимі відповіді`}</span></li>`).join("")}</ol>`;
+    } catch (error) {
+      preview.innerHTML = `<div class="msg error">${escape(error.message || "Перевір формат рядків.")}</div>`;
+    }
+  }
+
+  function exerciseAnswers(form) {
+    return Array.from(form.querySelectorAll('[name^="answer-"]')).reduce((answers, input) => {
+      if (input.type === "radio" && !input.checked) return answers;
+      const answer = String(input.value || "").trim();
+      if (answer) answers[input.name.slice("answer-".length)] = answer;
+      return answers;
+    }, {});
+  }
+
+  function normalizedExerciseAnswer(answer) {
+    return String(answer || "").trim().toLocaleLowerCase("uk-UA").replace(/\s+/g, " ");
+  }
+
+  function homeworkLabelForExercise(homeworkId) {
+    const task = homeworkById(homeworkId);
+    if (!task) return "без прив'язки";
+    const lesson = task.lesson_id ? lessonById(task.lesson_id) : null;
+    return lesson ? `${formatDateTime(lesson.starts_at)} · ${subjectName(lesson.subject_id)}` : formatDateTime(task.created_at);
   }
 
   function safeWordwallUrl(value) {
@@ -1631,6 +1681,9 @@
     form.querySelectorAll("[data-exercise-kind-fields]").forEach((section) => {
       section.classList.toggle("is-visible", section.dataset.exerciseKindFields === kind);
     });
+    form.querySelector("[data-exercise-import-fields]")?.classList.toggle("is-hidden", kind === "wordwall");
+    const preview = form.querySelector("[data-exercise-import-preview]");
+    if (preview) preview.innerHTML = "";
   }
 
   function lessonStudents(lessonId) {
@@ -1987,6 +2040,10 @@
     if (text.includes("Exercise title is required")) return "Додай назву вправи для бібліотеки.";
     if (text.includes("Multiple choice needs options")) return "Для вибору варіанту потрібні щонайменше дві відповіді та позначений правильний варіант.";
     if (text.includes("Fill in the blank needs")) return "Додай хоча б один правильний варіант відповіді.";
+    if (text.includes("Exercise items are invalid") || text.includes("Each exercise item needs") || text.includes("Exercise question ids must be unique")) return "Перевір рядки вправи: кожне завдання має мати текст і правильну відповідь.";
+    if (text.includes("Multiple choice item needs")) return "У кожному рядку з вибором варіанту має бути щонайменше два варіанти та правильна відповідь.";
+    if (text.includes("Fill in the blank item needs")) return "У кожному рядку з пропущеним словом додай хоча б одну правильну відповідь.";
+    if (text.includes("Homework has no recipients")) return "У цього домашнього завдання немає учнів, тому вправу не можна додати.";
     if (text.includes("A secure Wordwall link is required")) return "Додай коректне посилання https://wordwall.net/...";
     if (text.includes("Exercise template access denied") || text.includes("Exercise access denied")) return "Немає доступу до цієї вправи.";
     if (text.includes("Only Wordwall assignments can be confirmed")) return "Вручну можна підтвердити лише вправу Wordwall.";
