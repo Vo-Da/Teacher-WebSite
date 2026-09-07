@@ -1268,6 +1268,104 @@ textarea:focus {
   color: #b64744;
 }
 
+.teacher-homework-exercises {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.teacher-homework-exercises h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.teacher-homework-exercise {
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fbfdff;
+}
+
+.teacher-exercise-attempts {
+  display: grid;
+  gap: 8px;
+}
+
+.teacher-exercise-attempt {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+}
+
+.teacher-exercise-attempt summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.teacher-exercise-answers {
+  display: grid;
+  gap: 9px;
+  padding: 0 12px 12px;
+}
+
+.teacher-exercise-question {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-left: 3px solid var(--line);
+  background: #fbfdff;
+}
+
+.teacher-exercise-question.is-correct {
+  border-left-color: #4ba970;
+  background: #f4fcf6;
+}
+
+.teacher-exercise-question.is-incorrect {
+  border-left-color: #dc7774;
+  background: #fffafa;
+}
+
+.teacher-exercise-options {
+  display: grid;
+  gap: 5px;
+}
+
+.teacher-exercise-option,
+.teacher-exercise-text-answer {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+}
+
+.teacher-exercise-option span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.teacher-exercise-option.is-correct,
+.teacher-exercise-text-answer.is-correct {
+  border-color: #86d3a5;
+  background: #e6f9ed;
+}
+
+.teacher-exercise-option.is-incorrect,
+.teacher-exercise-text-answer.is-incorrect {
+  border-color: #f2aaa9;
+  background: #ffeaea;
+}
+
 .wordwall-box {
   display: grid;
   gap: 8px;
