@@ -1236,14 +1236,16 @@
 
     for (const file of files) {
       const extension = file.name.split(".").pop()?.toLowerCase();
+      // Browsers can append codec details (for example, audio/webm;codecs=opus).
+      // Storage and our allowed-type list need the base MIME type instead.
+      const mimeType = normalizeMimeType(file.type) || mimeTypeForExtension(extension);
       const allowedExtension = ["pdf", "jpg", "jpeg", "png", "webp", "docx", "webm", "ogg", "mp3", "m4a", "mp4"].includes(extension);
       if (file.size > 50 * 1024 * 1024) throw new Error(`Файл «${file.name}» перевищує ліміт 50 МБ.`);
-      if (!allowedExtension || (file.type && !allowed.has(file.type))) throw new Error(`Формат файлу «${file.name}» не підтримується.`);
+      if (!allowedExtension || !allowed.has(mimeType)) throw new Error(`Формат файлу «${file.name}» не підтримується.`);
 
       const fileName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
       const random = typeof crypto?.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
       const storagePath = `${state.session.user.id}/${random}-${fileName}`;
-      const mimeType = file.type || mimeTypeForExtension(extension);
       const { error: uploadError } = await state.client.storage.from("portal-files").upload(storagePath, file, {
         cacheControl: "3600",
         contentType: mimeType,
@@ -1267,6 +1269,10 @@
         throw attachmentError;
       }
     }
+  }
+
+  function normalizeMimeType(value) {
+    return String(value || "").split(";", 1)[0].trim().toLowerCase();
   }
 
   function mimeTypeForExtension(extension) {
