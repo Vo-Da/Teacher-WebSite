@@ -1224,6 +1224,50 @@ textarea:focus {
   font-weight: 750;
 }
 
+.exercise-question.is-correct {
+  border-color: #86d3a5;
+  background: #f0fcf4;
+}
+
+.exercise-question.is-incorrect {
+  border-color: #f2aaa9;
+  background: #fff7f7;
+}
+
+.exercise-option.is-correct {
+  border-color: #86d3a5;
+  background: #e6f9ed;
+}
+
+.exercise-option.is-incorrect {
+  border-color: #f2aaa9;
+  background: #ffeaea;
+}
+
+.exercise-question input.is-correct {
+  border-color: #4ba970;
+  background: #f4fcf6;
+}
+
+.exercise-question input.is-incorrect {
+  border-color: #dc7774;
+  background: #fffafa;
+}
+
+.exercise-feedback {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.exercise-feedback.is-correct {
+  color: #167341;
+}
+
+.exercise-feedback.is-incorrect {
+  color: #b64744;
+}
+
 .wordwall-box {
   display: grid;
   gap: 8px;

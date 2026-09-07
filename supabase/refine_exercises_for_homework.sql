@@ -9,6 +9,10 @@ alter table public.exercise_assignments
 alter table public.exercise_assignment_students
   add column if not exists homework_student_id uuid references public.homework_students(id) on delete cascade;
 
+alter table public.exercise_attempts
+  add column if not exists results jsonb not null default '{}'::jsonb
+  check (jsonb_typeof(results) = 'object');
+
 create index if not exists exercise_assignments_homework_idx
   on public.exercise_assignments (homework_id, created_at desc)
   where homework_id is not null;
@@ -243,6 +247,7 @@ declare
   v_score integer;
   v_total integer;
   v_status text;
+  v_results jsonb := '{}'::jsonb;
 begin
   select recipient.student_id, template.kind, template.content, answer_key.answer_data
   into v_student_id, v_kind, v_content, v_answer_data
@@ -287,6 +292,7 @@ begin
       end if;
       v_total := v_total + 1;
       if v_correct then v_score := v_score + 1; end if;
+      v_results := v_results || jsonb_build_object(v_item_id, v_correct);
     end loop;
     if v_total = 0 then raise exception 'Exercise has no items'; end if;
     v_status := 'completed';
@@ -298,8 +304,8 @@ begin
     raise exception 'Unsupported exercise type';
   end if;
 
-  insert into public.exercise_attempts (assignment_student_id, student_id, answers, score, total_score)
-  values (p_assignment_student_id, auth.uid(), coalesce(p_answers, '{}'::jsonb), v_score, v_total);
+  insert into public.exercise_attempts (assignment_student_id, student_id, answers, results, score, total_score)
+  values (p_assignment_student_id, auth.uid(), coalesce(p_answers, '{}'::jsonb), v_results, v_score, v_total);
 
   update public.exercise_assignment_students
   set attempts_count = attempts_count + 1,

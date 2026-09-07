@@ -1178,6 +1178,7 @@
     const assignment = exerciseAssignmentById(recipient.assignment_id);
     const template = assignment ? exerciseTemplateById(assignment.template_id) : null;
     if (!assignment || !template) return "";
+    const latestAttempt = latestExerciseAttempt(recipient.id);
     const attemptInfo = recipient.attempts_count ? `<div class="meta">Спроб: ${recipient.attempts_count}${recipient.best_score === null || recipient.best_score === undefined ? "" : ` · найкращий результат: ${recipient.best_score}/${recipient.total_score || 0}`}</div>` : "";
     const prompt = template.prompt ? `<div class="exercise-prompt">${escape(template.prompt)}</div>` : "";
     const hidden = `<input type="hidden" name="assignmentStudentId" value="${recipient.id}" /><input type="hidden" name="kind" value="${escapeAttr(template.kind)}" />`;
@@ -1186,15 +1187,26 @@
       return `<div class="filebox exercise-homework"><div class="item-head"><strong>${escape(template.title)}</strong>${exerciseStatusBadge(recipient.status)}</div>${prompt}${attemptInfo}<div class="wordwall-box"><p>Відкрий вправу в новій вкладці, а після завершення повернися сюди.</p>${url ? `<a class="btn secondary" href="${escapeAttr(url)}" target="_blank" rel="noopener">Відкрити Wordwall</a>` : '<div class="msg error">Посилання на Wordwall недоступне.</div>'}</div><form id="submitExerciseForm" class="stack" style="margin-top:12px;">${hidden}<button class="btn primary" type="submit">Я виконав/ла вправу</button></form></div>`;
     }
     const items = exerciseItems(template);
-    return `<div class="filebox exercise-homework"><div class="item-head"><strong>${escape(template.title)}</strong>${exerciseStatusBadge(recipient.status)}</div>${prompt}${attemptInfo}<form id="submitExerciseForm" class="stack" style="margin-top:12px;">${hidden}<div class="exercise-question-list">${items.map((item, index) => renderExerciseQuestion(item, template.kind, index + 1)).join("")}</div><button class="btn primary" type="submit">Перевірити всі відповіді</button></form></div>`;
+    return `<div class="filebox exercise-homework"><div class="item-head"><strong>${escape(template.title)}</strong>${exerciseStatusBadge(recipient.status)}</div>${prompt}${attemptInfo}<form id="submitExerciseForm" class="stack" style="margin-top:12px;">${hidden}<div class="exercise-question-list">${items.map((item, index) => renderExerciseQuestion(item, template.kind, index + 1, latestAttempt)).join("")}</div><button class="btn primary" type="submit">Перевірити всі відповіді</button></form></div>`;
   }
 
-  function renderExerciseQuestion(item, kind, number) {
+  function renderExerciseQuestion(item, kind, number, attempt) {
+    const answer = String(attempt?.answers?.[item.id] || "");
+    const result = typeof attempt?.results?.[item.id] === "boolean" && answer ? attempt.results[item.id] : null;
+    const feedback = result === true
+      ? '<p class="exercise-feedback is-correct">Правильно</p>'
+      : result === false
+        ? '<p class="exercise-feedback is-incorrect">Є помилка. Спробуй ще раз.</p>'
+        : "";
     if (kind === "multiple_choice") {
       const options = Array.isArray(item.options) ? item.options : [];
-      return `<fieldset class="exercise-question"><legend>${number}. ${escape(item.prompt)}</legend><div class="exercise-options">${options.map((option) => `<label class="exercise-option"><input type="radio" name="answer-${escapeAttr(item.id)}" value="${escapeAttr(option.id)}" />${escape(option.text)}</label>`).join("")}</div></fieldset>`;
+      return `<fieldset class="exercise-question ${result === true ? "is-correct" : result === false ? "is-incorrect" : ""}"><legend>${number}. ${escape(item.prompt)}</legend><div class="exercise-options">${options.map((option) => {
+        const isSelected = answer === option.id;
+        const optionClass = isSelected && result === true ? " is-correct" : isSelected && result === false ? " is-incorrect" : "";
+        return `<label class="exercise-option${optionClass}"><input type="radio" name="answer-${escapeAttr(item.id)}" value="${escapeAttr(option.id)}" ${isSelected ? "checked" : ""} />${escape(option.text)}</label>`;
+      }).join("")}</div>${feedback}</fieldset>`;
     }
-    return `<div class="exercise-question"><label>${number}. ${escape(item.prompt)}<input name="answer-${escapeAttr(item.id)}" autocomplete="off" /></label></div>`;
+    return `<div class="exercise-question ${result === true ? "is-correct" : result === false ? "is-incorrect" : ""}"><label>${number}. ${escape(item.prompt)}<input class="${result === true ? "is-correct" : result === false ? "is-incorrect" : ""}" name="answer-${escapeAttr(item.id)}" value="${escapeAttr(answer)}" autocomplete="off" /></label>${feedback}</div>`;
   }
 
   function renderLessonFeed(lessons) {
@@ -1562,6 +1574,12 @@
 
   function exerciseTemplateById(id) {
     return state.data.exerciseTemplates.find((template) => template.id === id) || null;
+  }
+
+  function latestExerciseAttempt(assignmentStudentId) {
+    return state.data.exerciseAttempts
+      .filter((attempt) => attempt.assignment_student_id === assignmentStudentId)
+      .sort((a, b) => b.submitted_at.localeCompare(a.submitted_at))[0] || null;
   }
 
   function exerciseItems(template) {
