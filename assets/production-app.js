@@ -29,6 +29,7 @@
   document.addEventListener("submit", handleSubmit);
   document.addEventListener("change", handleChange);
   document.addEventListener("input", handleInput);
+  document.addEventListener("toggle", handleToggle, true);
 
   void initialize();
 
@@ -385,10 +386,6 @@
         removeWordOrderToken(target);
         return;
       }
-      if (action === "shuffle-word-order-tokens") {
-        shuffleWordOrderTokens(target);
-        return;
-      }
       if (action === "select-matching-left") {
         selectMatchingLeft(target);
         return;
@@ -526,6 +523,12 @@
       });
       if (search && !group.hidden) group.open = true;
     });
+  }
+
+  function handleToggle(event) {
+    const details = event.target;
+    if (!details.matches?.("details.exercise-homework[open]")) return;
+    details.querySelectorAll(".word-order-bank-tokens").forEach(shuffleWordOrderBank);
   }
 
   async function handleSubmit(event) {
@@ -1425,7 +1428,7 @@
     const tokenIds = new Set(tokens.map((token) => token.id));
     const answerIds = parseExerciseAnswerArray(rawAnswer).filter((tokenId) => tokenIds.has(tokenId));
     const answerTokens = answerIds.map((tokenId) => tokens.find((token) => token.id === tokenId)).filter(Boolean);
-    return `<fieldset class="exercise-question word-order-question ${result === true ? "is-correct" : result === false ? "is-incorrect" : ""}" data-word-order-board><legend>${number}. Склади речення</legend><input type="hidden" name="answer-${escapeAttr(item.id)}" value="${escapeAttr(JSON.stringify(answerIds))}" /><div class="word-order-answer"><strong>Твій порядок</strong><div class="word-order-answer-tokens" data-word-order-answer>${answerTokens.length ? answerTokens.map((token) => renderWordOrderToken(token, "remove-word-order-token", "word-order-answer-token")).join("") : '<span class="meta">Натискай слова нижче, щоб скласти речення.</span>'}</div></div><div class="word-order-bank"><div class="item-head"><strong>Слова</strong><button type="button" class="btn small secondary" data-action="shuffle-word-order-tokens">Перемішати слова</button></div><div class="word-order-bank-tokens">${shuffled(tokens).map((token) => renderWordOrderToken(token, "add-word-order-token", "word-order-bank-token", answerIds.includes(token.id))).join("")}</div></div>${feedback}</fieldset>`;
+    return `<fieldset class="exercise-question word-order-question ${result === true ? "is-correct" : result === false ? "is-incorrect" : ""}" data-word-order-board><legend>${number}. Склади речення</legend><input type="hidden" name="answer-${escapeAttr(item.id)}" value="${escapeAttr(JSON.stringify(answerIds))}" /><div class="word-order-answer"><strong>Твій порядок</strong><div class="word-order-answer-tokens" data-word-order-answer>${answerTokens.length ? answerTokens.map((token) => renderWordOrderToken(token, "remove-word-order-token", "word-order-answer-token")).join("") : '<span class="meta">Натискай слова нижче, щоб скласти речення.</span>'}</div></div><div class="word-order-bank"><strong>Слова</strong><div class="word-order-bank-tokens">${shuffled(tokens).map((token) => renderWordOrderToken(token, "add-word-order-token", "word-order-bank-token", answerIds.includes(token.id))).join("")}</div></div>${feedback}</fieldset>`;
   }
 
   function renderWordOrderToken(token, action, className, disabled = false) {
@@ -1479,9 +1482,7 @@
     updateWordOrderBoard(board, wordOrderAnswerIds(board).filter((tokenId) => tokenId !== target.dataset.tokenId));
   }
 
-  function shuffleWordOrderTokens(target) {
-    const bank = target.closest("[data-word-order-board]")?.querySelector(".word-order-bank-tokens");
-    if (!bank) return;
+  function shuffleWordOrderBank(bank) {
     shuffled(Array.from(bank.children)).forEach((token) => bank.append(token));
   }
 
