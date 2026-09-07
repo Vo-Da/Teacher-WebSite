@@ -18,6 +18,8 @@
     selectedLessonId: null,
     selectedHomeworkId: null,
     selectedStudentId: null,
+    homeworkFilters: { studentStatus: "all", teacherStatus: "all", teacherStudentId: "all" },
+    exerciseGroupsAvailable: true,
     recording: null,
     notice: null,
     loading: false
@@ -42,6 +44,7 @@
       homework: [],
       homeworkStudents: [],
       submissions: [],
+      exerciseGroups: [],
       exerciseTemplates: [],
       exerciseAssignments: [],
       exerciseAssignmentStudents: [],
@@ -87,6 +90,7 @@
     state.school = null;
     state.canBootstrapSchool = false;
     state.data = emptyData();
+    state.exerciseGroupsAvailable = true;
     state.selectedLessonId = null;
     state.selectedHomeworkId = null;
     state.selectedStudentId = null;
@@ -155,7 +159,7 @@
     const schoolId = state.membership.school_id;
     const canAdminister = hasRole("admin");
     const canManageStudentContext = state.activeRole === "admin" || state.activeRole === "teacher";
-    const [subjects, relations, lessons, homework, profiles, memberships, studentInternalProfiles, studentInternalNotes, exerciseTemplates, exerciseAssignments] = await Promise.all([
+    const [subjects, relations, lessons, homework, profiles, memberships, studentInternalProfiles, studentInternalNotes, exerciseGroups, exerciseTemplates, exerciseAssignments] = await Promise.all([
       selectRows("subjects", (q) => q.eq("school_id", schoolId).order("name")),
       selectRows("teacher_students", (q) => q.eq("school_id", schoolId).eq("is_active", true)),
       selectRows("lessons", (q) => q.eq("school_id", schoolId).order("starts_at")),
@@ -164,6 +168,7 @@
       canAdminister ? selectRows("school_memberships", (q) => q.eq("school_id", schoolId)) : Promise.resolve([]),
       canManageStudentContext ? selectRows("student_internal_profiles", (q) => q.eq("school_id", schoolId)) : Promise.resolve([]),
       canManageStudentContext ? selectRows("student_internal_notes", (q) => q.eq("school_id", schoolId).order("created_at", { ascending: false })) : Promise.resolve([]),
+      selectExerciseGroups(schoolId),
       selectRows("exercise_templates", (q) => q.eq("school_id", schoolId).order("created_at", { ascending: false })),
       selectRows("exercise_assignments", (q) => q.eq("school_id", schoolId).order("created_at", { ascending: false }))
     ]);
@@ -176,6 +181,7 @@
     state.data.memberships = memberships;
     state.data.studentInternalProfiles = studentInternalProfiles;
     state.data.studentInternalNotes = studentInternalNotes;
+    state.data.exerciseGroups = exerciseGroups;
     state.data.exerciseTemplates = exerciseTemplates;
     state.data.exerciseAssignments = exerciseAssignments;
 
@@ -211,6 +217,18 @@
   async function selectRowsIn(table, column, ids) {
     if (!ids.length) return [];
     return selectRows(table, (q) => q.in(column, ids));
+  }
+
+  async function selectExerciseGroups(schoolId) {
+    try {
+      return await selectRows("exercise_groups", (q) => q.eq("school_id", schoolId).order("name"));
+    } catch (error) {
+      if (error?.code === "PGRST205" || error?.code === "42P01" || String(error?.message || "").includes("exercise_groups")) {
+        state.exerciseGroupsAvailable = false;
+        return [];
+      }
+      throw error;
+    }
   }
 
   function renderSetup() {
@@ -422,6 +440,14 @@
         await reviewWordwallExercise(target.dataset.assignmentStudentId);
         return;
       }
+      if (action === "delete-exercise-group") {
+        if (!confirm("Видалити цю групу? Вправи в ній залишаться, але будуть позначені як «Без групи».")) return;
+        const { error } = await state.client.from("exercise_groups").delete().eq("id", target.dataset.groupId);
+        if (error) throw error;
+        state.notice = success("Групу вправ видалено.");
+        await refreshContext();
+        return;
+      }
       if (action === "delete-lesson") {
         if (!confirm("Видалити це заняття?")) return;
         const { error } = await state.client.from("lessons").delete().eq("id", target.dataset.lessonId);
@@ -437,6 +463,11 @@
 
   function handleChange(event) {
     const input = event.target;
+    if (input.matches?.("[data-homework-filter]")) {
+      state.homeworkFilters[input.dataset.homeworkFilter] = input.value || "all";
+      renderDashboard();
+      return;
+    }
     if (input.matches?.("[data-student-stat-range]")) {
       const statistics = input.closest(".student-statistics");
       refreshStudentStatistics(statistics);
@@ -472,6 +503,7 @@
       if (form.id === "recordPaymentForm") await recordPayment(form);
       if (form.id === "submitHomeworkForm") await submitHomework(form);
       if (form.id === "feedbackForm") await sendFeedback(form);
+      if (form.id === "createExerciseGroupForm") await createExerciseGroup(form);
       if (form.id === "createExerciseTemplateForm") await createExerciseTemplate(form);
       if (form.id === "submitExerciseForm") await submitExercise(form);
       if (form.id === "studentInternalCardForm") await saveStudentInternalCard(form);
@@ -714,16 +746,33 @@
       throw new Error("Обери тип вправи.");
     }
 
-    const { error } = await state.client.rpc("create_exercise_template", {
+    const groupId = value(form, "groupId");
+    const args = {
       p_school_id: state.school.id,
       p_kind: kind,
       p_title: title,
       p_prompt: prompt,
       p_content: content,
       p_answer_data: answerData
-    });
+    };
+    if (groupId) args.p_group_id = groupId;
+    const { error } = await state.client.rpc("create_exercise_template", args);
     if (error) throw error;
     state.notice = success("Вправу додано до бібліотеки.");
+    await refreshContext();
+  }
+
+  async function createExerciseGroup(form) {
+    if (!state.exerciseGroupsAvailable) throw new Error("Групи вправ ще не підключені. Виконай оновлену SQL-міграцію в Supabase.");
+    const name = value(form, "name");
+    if (name.length < 2) throw new Error("Введи назву групи щонайменше з двох символів.");
+    const { error } = await state.client.from("exercise_groups").insert({
+      school_id: state.school.id,
+      teacher_id: state.session.user.id,
+      name
+    });
+    if (error) throw error;
+    state.notice = success("Групу вправ створено.");
     await refreshContext();
   }
 
@@ -1005,23 +1054,25 @@
     const selected = selectedLesson();
     return `
       <div class="page-heading"><div><p class="eyebrow">Перевірка</p><h1>Домашні завдання</h1><p class="muted">Публікуй завдання, дивись відповіді й повертай роботу на доопрацювання.</p></div></div>
-      <div class="work-grid"><div class="card"><h2>Нове домашнє</h2>${renderHomeworkForm(selected)}</div><div class="card"><h2>На перевірці</h2>${renderTeacherHomeworkReview(tasks)}</div></div>
+      <div class="work-grid"><div class="card"><h2>Нове домашнє</h2>${renderHomeworkForm(selected)}</div><div class="card"><h2>Роботи учнів</h2>${renderTeacherHomeworkFilters(tasks)}${renderTeacherHomeworkReview(tasks)}</div></div>
     `;
   }
 
   function renderTeacherExercises() {
     const templates = state.data.exerciseTemplates.filter((template) => template.teacher_id === state.session.user.id && template.is_active);
+    const groups = ownExerciseGroups();
     return `
       <div class="page-heading"><div><p class="eyebrow">Практика</p><h1>Вправи</h1><p class="muted">Створи набір до 30 завдань, а потім додай його до домашнього завдання.</p></div></div>
-      <div class="work-grid"><div class="card"><h2>Нова вправа</h2>${renderExerciseTemplateForm()}</div><div class="card"><h2>Як це працює</h2><div class="process-note"><strong>1.</strong> Встав до 30 рядків із таблиці.<br><strong>2.</strong> Перевір попередній перегляд та збережи вправу.<br><strong>3.</strong> У «Домашніх» вибери її з бібліотеки.<br><strong>4.</strong> Учень виконає вправу всередині домашнього.</div></div></div>
-      <div class="card"><h2>Бібліотека вправ</h2>${renderExerciseLibrary(templates)}</div>
+      <div class="work-grid"><div class="card"><h2>Нова вправа</h2>${renderExerciseTemplateForm(groups)}</div><div class="card"><h2>Групи вправ</h2>${renderExerciseGroupForm(groups)}</div></div>
+      <div class="card"><h2>Бібліотека вправ</h2>${renderExerciseLibrary(templates, groups)}</div>
     `;
   }
 
-  function renderExerciseTemplateForm() {
+  function renderExerciseTemplateForm(groups) {
     return `
       <form id="createExerciseTemplateForm" class="stack">
         <div class="field"><label>Тип вправи</label><select name="exerciseKind"><option value="multiple_choice">Вибрати правильний варіант</option><option value="fill_blank">Вставити пропущене слово</option><option value="wordwall">Wordwall</option></select></div>
+        <div class="field"><label>Група / тема <span class="field-optional">(необов’язково)</span></label><select name="groupId"><option value="">Без групи</option>${groups.map((group) => `<option value="${group.id}">${escape(group.name)}</option>`).join("")}</select></div>
         <div class="field"><label>Назва вправи</label><input name="title" maxlength="200" placeholder="Наприклад, Present Simple: повторення" /></div>
         <div class="field"><label>Текст / інструкція <span class="field-optional">(необов’язково)</span></label><textarea name="prompt" maxlength="10000" placeholder="Напиши запитання, речення з пропуском або коротку інструкцію."></textarea></div>
         <div class="exercise-import-fields" data-exercise-import-fields><div class="field"><label>Рядки вправи</label><textarea name="importRows" rows="10" placeholder="She ___ to school. / go;goes;going;gone / goes"></textarea></div><button class="btn small secondary" type="button" data-action="preview-exercise-import">Перевірити рядки</button><div class="exercise-import-preview" data-exercise-import-preview></div></div>
@@ -1033,8 +1084,21 @@
     `;
   }
 
-  function renderExerciseLibrary(templates) {
-    return `<div class="list">${templates.length ? templates.map((template) => `<div class="item"><div><p class="item-title">${escape(template.title)}</p><div class="meta">${escape(exerciseKindLabel(template.kind))} · ${template.kind === "wordwall" ? "зовнішня вправа" : `${exerciseItems(template).length} завдань`} · створено ${escape(formatDateTime(template.created_at))}</div>${template.prompt ? `<div class="exercise-prompt">${escape(template.prompt)}</div>` : ""}${template.kind === "wordwall" && safeWordwallUrl(template.content?.url) ? `<a class="exercise-link" href="${escapeAttr(safeWordwallUrl(template.content?.url))}" target="_blank" rel="noopener">Відкрити Wordwall</a>` : ""}</div><span class="exercise-kind-badge">${escape(exerciseKindLabel(template.kind))}</span></div>`).join("") : empty("Бібліотека ще порожня.")}</div>`;
+  function renderExerciseGroupForm(groups) {
+    if (!state.exerciseGroupsAvailable) return `<div class="filebox">Щоб створювати групи, виконай оновлений файл <code>refine_exercises_for_homework.sql</code> у Supabase.</div>`;
+    return `<form id="createExerciseGroupForm" class="stack"><div class="field"><label>Нова група / тема</label><input name="name" maxlength="100" placeholder="Наприклад, Present Simple" /></div><button class="btn primary" type="submit">Створити групу</button></form><div class="exercise-group-chips">${groups.map((group) => `<span class="exercise-group-chip">${escape(group.name)}<button type="button" data-action="delete-exercise-group" data-group-id="${group.id}" aria-label="Видалити групу ${escapeAttr(group.name)}">×</button></span>`).join("") || '<span class="meta">Груп ще немає.</span>'}</div>`;
+  }
+
+  function renderExerciseLibrary(templates, groups) {
+    if (!templates.length) return empty("Бібліотека ще порожня.");
+    const sections = groups.map((group) => ({ name: group.name, templates: templates.filter((template) => template.group_id === group.id) }));
+    const ungrouped = templates.filter((template) => !template.group_id || !groups.some((group) => group.id === template.group_id));
+    if (ungrouped.length) sections.push({ name: "Без групи", templates: ungrouped });
+    return `<div class="exercise-library-groups">${sections.map((section) => `<section class="exercise-library-group"><h3>${escape(section.name)}</h3>${section.templates.length ? `<div class="list">${section.templates.map(renderExerciseLibraryItem).join("")}</div>` : empty("У цій групі ще немає вправ.")}</section>`).join("")}</div>`;
+  }
+
+  function renderExerciseLibraryItem(template) {
+    return `<div class="item"><div><p class="item-title">${escape(template.title)}</p><div class="meta">${escape(exerciseKindLabel(template.kind))} · ${template.kind === "wordwall" ? "зовнішня вправа" : `${exerciseItems(template).length} завдань`} · створено ${escape(formatDateTime(template.created_at))}</div>${template.prompt ? `<div class="exercise-prompt">${escape(template.prompt)}</div>` : ""}${template.kind === "wordwall" && safeWordwallUrl(template.content?.url) ? `<a class="exercise-link" href="${escapeAttr(safeWordwallUrl(template.content?.url))}" target="_blank" rel="noopener">Відкрити Wordwall</a>` : ""}</div><span class="exercise-kind-badge">${escape(exerciseKindLabel(template.kind))}</span></div>`;
   }
 
   function renderStudentView() {
@@ -1067,9 +1131,10 @@
   }
 
   function renderStudentHomework() {
-    const tasks = myHomeworkStudents();
+    const tasks = myHomeworkStudents().filter((item) => matchesHomeworkStatus(item, state.homeworkFilters.studentStatus));
     return `
       <div class="page-heading"><div><p class="eyebrow">Домашні завдання</p><h1>Мої роботи</h1><p class="muted">Надсилай текст або файл і повертайся до коментаря викладача.</p></div></div>
+      ${renderStudentHomeworkFilters()}
       <div class="list">${tasks.map((item) => renderStudentHomeworkCard(item)).join("") || empty("Домашніх завдань поки немає.")}</div>
     `;
   }
@@ -1127,24 +1192,42 @@
         <div class="field"><label>Пов’язати із заняттям <span class="field-optional">(необов’язково)</span></label><select name="lessonId"><option value="">Без прив’язки</option>${state.data.lessons.filter((lesson) => lesson.teacher_id === state.session.user.id).map((lesson) => `<option value="${lesson.id}" ${selected?.id === lesson.id ? "selected" : ""}>${escape(homeworkLessonLabel(lesson))}</option>`).join("")}</select></div>
         <div class="field"><label>Текст <span class="field-optional">(необов’язково)</span></label><textarea name="description" placeholder="Напиши інструкцію або залиш поле порожнім, якщо додаси файл чи запис."></textarea></div><div class="field"><label>Дедлайн <span class="field-optional">(необов’язково)</span></label><input name="deadline" type="datetime-local" /></div>
         ${selectField("studentIds", "Учні (лише якщо без заняття)", students.map((student) => ({ user_id: student.id })), false, null, true)}
-        ${templates.length ? `<div class="filebox stack"><strong>Вправи з бібліотеки <span class="field-optional">(необов’язково)</span></strong><select name="exerciseTemplateIds" multiple size="4">${templates.map((template) => `<option value="${template.id}">${escape(template.title)} · ${escape(exerciseKindLabel(template.kind))}</option>`).join("")}</select><div class="meta">Обрані вправи з’являться в цьому домашньому для кожного учня.</div></div>` : ""}
+        ${templates.length ? `<div class="filebox stack"><strong>Вправи з бібліотеки <span class="field-optional">(необов’язково)</span></strong><select name="exerciseTemplateIds" multiple size="4">${templates.map((template) => `<option value="${template.id}">${escape(exerciseTemplateLabel(template))} · ${escape(exerciseKindLabel(template.kind))}</option>`).join("")}</select><div class="meta">Обрані вправи з’являться в цьому домашньому для кожного учня.</div></div>` : ""}
         ${renderVoiceCapture(`homework-${selected?.id || "new"}`, "Голосова інструкція")}${renderVideoCapture(`homework-video-${selected?.id || "new"}`, "Відеоінструкція")}
         <div class="field"><label>Вкладення <span class="field-optional">(необов’язково)</span></label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn primary" type="submit">Опублікувати</button>
       </form>
     `;
   }
 
+  function renderStudentHomeworkFilters() {
+    return `<div class="homework-filters student-homework-filters"><div class="field"><label>Статус домашнього</label><select data-homework-filter="studentStatus">${homeworkStatusFilterOptions(state.homeworkFilters.studentStatus)}</select></div></div>`;
+  }
+
+  function renderTeacherHomeworkFilters(tasks) {
+    const studentIds = new Set(tasks.flatMap((task) => homeworkStudents(task.id).map((recipient) => recipient.student_id)));
+    const students = state.data.profiles
+      .filter((profile) => studentIds.has(profile.id))
+      .sort((left, right) => left.full_name.localeCompare(right.full_name, "uk"));
+    return `<div class="homework-filters"><div class="field"><label>Статус домашнього</label><select data-homework-filter="teacherStatus">${homeworkStatusFilterOptions(state.homeworkFilters.teacherStatus)}</select></div><div class="field"><label>Учень</label><select data-homework-filter="teacherStudentId"><option value="all">Усі учні</option>${students.map((student) => `<option value="${student.id}" ${student.id === state.homeworkFilters.teacherStudentId ? "selected" : ""}>${escape(student.full_name)}</option>`).join("")}</select></div></div>`;
+  }
+
+  function homeworkStatusFilterOptions(selected) {
+    return [["all", "Усі статуси"], ["not_started", "Не розпочато"], ["submitted", "На перевірці"], ["needs_revision", "На доопрацюванні"], ["reviewed", "Перевірено"]]
+      .map(([value, label]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`)
+      .join("");
+  }
+
   function renderTeacherHomeworkReview(tasks) {
-    const exerciseActivity = new Set(state.data.exerciseAssignmentStudents
-      .filter((recipient) => recipient.homework_student_id && (recipient.attempts_count > 0 || recipient.status !== "not_started"))
-      .map((recipient) => recipient.homework_student_id));
     const rows = tasks
       .flatMap((task) => homeworkStudents(task.id).map((recipient) => ({ task, recipient })))
-      .filter((row) => row.recipient.status !== "not_started" || exerciseActivity.has(row.recipient.id));
+      .filter((row) => matchesHomeworkStatus(row.recipient, state.homeworkFilters.teacherStatus))
+      .filter((row) => state.homeworkFilters.teacherStudentId === "all" || row.recipient.student_id === state.homeworkFilters.teacherStudentId);
     return `<div class="list">${rows.length ? rows.map(({ task, recipient }) => {
       const submissions = visibleSubmissionsFor(recipient.id);
-      return `<div class="item"><p class="item-title">${escape(homeworkReviewLabel(task, recipient))}</p><div class="meta">Статус: ${submissionLabel(recipient.status)}${recipient.grade ? " · оцінка: " + escape(recipient.grade) : ""}</div>${submissions.map((submission) => `<div class="filebox"><div>${escape(submission.body || "Файли без тексту")}</div>${renderAttachments({ submission_id: submission.id })}</div>`).join("")}${renderTeacherHomeworkExercises(recipient)}${recipient.teacher_comment ? `<div class="meta">Мій коментар: ${escape(recipient.teacher_comment)}</div>` : ""}<form id="feedbackForm" class="stack" style="margin-top:8px;"><input type="hidden" name="homeworkStudentId" value="${recipient.id}" /><div class="two-fields"><div class="field"><label>Статус</label><select name="status" required><option value="reviewed">Перевірено</option><option value="needs_revision">На доопрацювання</option></select></div><div class="field"><label>Оцінка <span class="field-optional">(необов’язково)</span></label><input name="grade" placeholder="Наприклад, 11/12" value="${escapeAttr(recipient.grade || "")}" /></div></div><div class="field"><label>Коментар <span class="field-optional">(необов’язково)</span></label><textarea name="comment">${escape(recipient.teacher_comment || "")}</textarea></div>${renderVoiceCapture(`feedback-${recipient.id}`, "Голосовий коментар")}${renderVideoCapture(`feedback-video-${recipient.id}`, "Відеокоментар")}<div class="field"><label>Виправлений файл <span class="field-optional">(необов’язково)</span></label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn small secondary" type="submit">Надіслати зворотний зв’язок</button></form></div>`;
-    }).join("") : empty("Надісланих робіт ще немає.")}</div>`;
+      const canReview = recipient.status !== "not_started" || hasHomeworkActivity(recipient.id);
+      const feedbackForm = `<form id="feedbackForm" class="stack" style="margin-top:8px;"><input type="hidden" name="homeworkStudentId" value="${recipient.id}" /><div class="two-fields"><div class="field"><label>Статус</label><select name="status" required><option value="reviewed">Перевірено</option><option value="needs_revision">На доопрацювання</option></select></div><div class="field"><label>Оцінка <span class="field-optional">(необов’язково)</span></label><input name="grade" placeholder="Наприклад, 11/12" value="${escapeAttr(recipient.grade || "")}" /></div></div><div class="field"><label>Коментар <span class="field-optional">(необов’язково)</span></label><textarea name="comment">${escape(recipient.teacher_comment || "")}</textarea></div>${renderVoiceCapture(`feedback-${recipient.id}`, "Голосовий коментар")}${renderVideoCapture(`feedback-video-${recipient.id}`, "Відеокоментар")}<div class="field"><label>Виправлений файл <span class="field-optional">(необов’язково)</span></label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn small secondary" type="submit">Надіслати зворотний зв’язок</button></form>`;
+      return `<div class="item"><p class="item-title">${escape(homeworkReviewLabel(task, recipient))}</p><div class="meta">Статус: ${submissionLabel(recipient.status)}${recipient.grade ? " · оцінка: " + escape(recipient.grade) : ""}</div>${submissions.map((submission) => `<div class="filebox"><div>${escape(submission.body || "Файли без тексту")}</div>${renderAttachments({ submission_id: submission.id })}</div>`).join("")}${renderTeacherHomeworkExercises(recipient)}${recipient.teacher_comment ? `<div class="meta">Мій коментар: ${escape(recipient.teacher_comment)}</div>` : ""}${canReview ? feedbackForm : '<div class="meta">Учень ще не надіслав роботу.</div>'}</div>`;
+    }).join("") : empty("За цими фільтрами домашніх завдань немає.")}</div>`;
   }
 
   function renderTeacherHomeworkExercises(homeworkRecipient) {
@@ -1161,9 +1244,9 @@
     const score = recipient.best_score === null || recipient.best_score === undefined ? "Без автоматичної оцінки" : `Найкращий результат: ${recipient.best_score}/${recipient.total_score || 0}`;
     if (template.kind === "wordwall") {
       const url = safeWordwallUrl(template.content?.url);
-      return `<details class="teacher-homework-exercise"><summary class="teacher-exercise-summary"><div><strong>${escape(template.title)}</strong><div class="meta">Wordwall · спроб: ${recipient.attempts_count}</div></div>${exerciseStatusBadge(recipient.status)}</summary><div class="teacher-homework-exercise-content">${template.prompt ? `<div class="exercise-prompt">${escape(template.prompt)}</div>` : ""}${url ? `<a class="exercise-link" href="${escapeAttr(url)}" target="_blank" rel="noopener">Відкрити Wordwall</a>` : ""}${recipient.status === "submitted" ? `<button class="btn small secondary" type="button" data-action="review-wordwall-exercise" data-assignment-student-id="${recipient.id}">Підтвердити виконання</button>` : ""}</div></details>`;
+      return `<details class="teacher-homework-exercise"><summary class="teacher-exercise-summary"><div><strong>${escape(exerciseTemplateLabel(template))}</strong><div class="meta">Wordwall · спроб: ${recipient.attempts_count}</div></div>${exerciseStatusBadge(recipient.status)}</summary><div class="teacher-homework-exercise-content">${template.prompt ? `<div class="exercise-prompt">${escape(template.prompt)}</div>` : ""}${url ? `<a class="exercise-link" href="${escapeAttr(url)}" target="_blank" rel="noopener">Відкрити Wordwall</a>` : ""}${recipient.status === "submitted" ? `<button class="btn small secondary" type="button" data-action="review-wordwall-exercise" data-assignment-student-id="${recipient.id}">Підтвердити виконання</button>` : ""}</div></details>`;
     }
-    return `<details class="teacher-homework-exercise"><summary class="teacher-exercise-summary"><div><strong>${escape(template.title)}</strong><div class="meta">${escape(exerciseKindLabel(template.kind))} · спроб: ${recipient.attempts_count} · ${score}</div></div>${exerciseStatusBadge(recipient.status)}</summary><div class="teacher-homework-exercise-content">${template.prompt ? `<div class="exercise-prompt">${escape(template.prompt)}</div>` : ""}${attempts.length ? `<div class="teacher-exercise-attempts">${attempts.map((attempt, index) => renderTeacherExerciseAttempt(template, attempt, index)).join("")}</div>` : empty("Учень ще не розпочав цю вправу.")}</div></details>`;
+    return `<details class="teacher-homework-exercise"><summary class="teacher-exercise-summary"><div><strong>${escape(exerciseTemplateLabel(template))}</strong><div class="meta">${escape(exerciseKindLabel(template.kind))} · спроб: ${recipient.attempts_count} · ${score}</div></div>${exerciseStatusBadge(recipient.status)}</summary><div class="teacher-homework-exercise-content">${template.prompt ? `<div class="exercise-prompt">${escape(template.prompt)}</div>` : ""}${attempts.length ? `<div class="teacher-exercise-attempts">${attempts.map((attempt, index) => renderTeacherExerciseAttempt(template, attempt, index)).join("")}</div>` : empty("Учень ще не розпочав цю вправу.")}</div></details>`;
   }
 
   function renderTeacherExerciseAttempt(template, attempt, index) {
@@ -1220,10 +1303,10 @@
     const hidden = `<input type="hidden" name="assignmentStudentId" value="${recipient.id}" /><input type="hidden" name="kind" value="${escapeAttr(template.kind)}" />`;
     if (template.kind === "wordwall") {
       const url = safeWordwallUrl(template.content?.url);
-      return `<details class="filebox exercise-homework"><summary class="exercise-summary"><strong>${escape(template.title)}</strong>${exerciseStatusBadge(recipient.status)}</summary><div class="exercise-homework-content">${prompt}${attemptInfo}<div class="wordwall-box"><p>Відкрий вправу в новій вкладці, а після завершення повернися сюди.</p>${url ? `<a class="btn secondary" href="${escapeAttr(url)}" target="_blank" rel="noopener">Відкрити Wordwall</a>` : '<div class="msg error">Посилання на Wordwall недоступне.</div>'}</div><form id="submitExerciseForm" class="stack" style="margin-top:12px;">${hidden}<button class="btn primary" type="submit">Я виконав/ла вправу</button></form></div></details>`;
+      return `<details class="filebox exercise-homework"><summary class="exercise-summary"><strong>${escape(exerciseTemplateLabel(template))}</strong>${exerciseStatusBadge(recipient.status)}</summary><div class="exercise-homework-content">${prompt}${attemptInfo}<div class="wordwall-box"><p>Відкрий вправу в новій вкладці, а після завершення повернися сюди.</p>${url ? `<a class="btn secondary" href="${escapeAttr(url)}" target="_blank" rel="noopener">Відкрити Wordwall</a>` : '<div class="msg error">Посилання на Wordwall недоступне.</div>'}</div><form id="submitExerciseForm" class="stack" style="margin-top:12px;">${hidden}<button class="btn primary" type="submit">Я виконав/ла вправу</button></form></div></details>`;
     }
     const items = exerciseItems(template);
-    return `<details class="filebox exercise-homework"><summary class="exercise-summary"><strong>${escape(template.title)}</strong>${exerciseStatusBadge(recipient.status)}</summary><div class="exercise-homework-content">${prompt}${attemptInfo}<form id="submitExerciseForm" class="stack" style="margin-top:12px;">${hidden}<div class="exercise-question-list">${items.map((item, index) => renderExerciseQuestion(item, template.kind, index + 1, latestAttempt)).join("")}</div><button class="btn primary" type="submit">Перевірити всі відповіді</button></form></div></details>`;
+    return `<details class="filebox exercise-homework"><summary class="exercise-summary"><strong>${escape(exerciseTemplateLabel(template))}</strong>${exerciseStatusBadge(recipient.status)}</summary><div class="exercise-homework-content">${prompt}${attemptInfo}<form id="submitExerciseForm" class="stack" style="margin-top:12px;">${hidden}<div class="exercise-question-list">${items.map((item, index) => renderExerciseQuestion(item, template.kind, index + 1, latestAttempt)).join("")}</div><button class="btn primary" type="submit">Перевірити всі відповіді</button></form></div></details>`;
   }
 
   function renderExerciseQuestion(item, kind, number, attempt) {
@@ -1607,6 +1690,19 @@
     return state.data.exerciseTemplates.find((template) => template.id === id) || null;
   }
 
+  function ownExerciseGroups() {
+    return state.data.exerciseGroups.filter((group) => group.teacher_id === state.session.user.id);
+  }
+
+  function exerciseGroupName(groupId) {
+    return state.data.exerciseGroups.find((group) => group.id === groupId)?.name || "";
+  }
+
+  function exerciseTemplateLabel(template) {
+    const groupName = exerciseGroupName(template.group_id);
+    return groupName ? `${groupName} · ${template.title}` : template.title;
+  }
+
   function latestExerciseAttempt(assignmentStudentId) {
     return exerciseAttemptsFor(assignmentStudentId).at(-1) || null;
   }
@@ -1748,6 +1844,15 @@
     return submissionsFor(homeworkStudentId).filter((submission) => {
       return Boolean(String(submission.body || "").trim()) || state.data.attachments.some((file) => file.submission_id === submission.id);
     });
+  }
+
+  function hasHomeworkActivity(homeworkStudentId) {
+    return visibleSubmissionsFor(homeworkStudentId).length > 0
+      || state.data.exerciseAssignmentStudents.some((recipient) => recipient.homework_student_id === homeworkStudentId && (recipient.attempts_count > 0 || recipient.status !== "not_started"));
+  }
+
+  function matchesHomeworkStatus(homeworkStudent, selectedStatus) {
+    return !selectedStatus || selectedStatus === "all" || homeworkStudent.status === selectedStatus;
   }
 
   function lessonById(id) {
@@ -2098,6 +2203,8 @@
     if (text.includes("Homework has no recipients")) return "У цього домашнього завдання немає учнів, тому вправу не можна додати.";
     if (text.includes("A secure Wordwall link is required")) return "Додай коректне посилання https://wordwall.net/...";
     if (text.includes("Exercise template access denied") || text.includes("Exercise access denied")) return "Немає доступу до цієї вправи.";
+    if (text.includes("Exercise group access denied")) return "Ця група вправ недоступна. Онови сторінку та вибери групу ще раз.";
+    if (text.includes("exercise_groups_school_id_teacher_id_name_key")) return "Група з такою назвою вже є у твоїй бібліотеці.";
     if (text.includes("Only Wordwall assignments can be confirmed")) return "Вручну можна підтвердити лише вправу Wordwall.";
     if (text.includes("overlaps an existing lesson")) return "Цей час перетинається з іншим активним заняттям у твоєму календарі.";
     if (text.includes("Selected subject is unavailable")) return "Обраний предмет недоступний. Онови сторінку та вибери активний предмет.";

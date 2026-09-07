@@ -1636,6 +1636,65 @@ select[multiple] {
   font-size: 14px;
 }
 
+.exercise-group-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.exercise-group-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px 6px 10px;
+  border: 1px solid #b8ded9;
+  border-radius: 999px;
+  color: #0f766e;
+  background: #f1faf8;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.exercise-group-chip button {
+  width: 19px;
+  height: 19px;
+  border: 0;
+  border-radius: 50%;
+  color: #7a3030;
+  background: #fde8e8;
+  cursor: pointer;
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.exercise-library-groups {
+  display: grid;
+  gap: 18px;
+}
+
+.exercise-library-group {
+  display: grid;
+  gap: 8px;
+}
+
+.exercise-library-group h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.homework-filters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 14px;
+}
+
+.student-homework-filters {
+  max-width: 300px;
+}
+
 body.is-loading {
   cursor: progress;
 }
@@ -1671,6 +1730,10 @@ body.is-loading {
   .calendar-workspace,
   .auth-columns,
   .work-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .homework-filters {
     grid-template-columns: 1fr;
   }
 }

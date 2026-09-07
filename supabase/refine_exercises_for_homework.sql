@@ -3,6 +3,63 @@
 -- It moves exercises into homework, supports up to 30 auto-checked questions,
 -- and keeps answer keys unavailable to students.
 
+create table if not exists public.exercise_groups (
+  id uuid primary key default gen_random_uuid(),
+  school_id uuid not null references public.schools(id) on delete cascade,
+  teacher_id uuid not null references auth.users(id) on delete cascade,
+  name text not null check (char_length(trim(name)) between 2 and 100),
+  created_at timestamptz not null default now(),
+  unique (school_id, teacher_id, name)
+);
+
+alter table public.exercise_templates
+  add column if not exists group_id uuid references public.exercise_groups(id) on delete set null;
+
+create index if not exists exercise_groups_school_teacher_idx
+  on public.exercise_groups (school_id, teacher_id, name);
+
+create index if not exists exercise_templates_group_idx
+  on public.exercise_templates (group_id)
+  where group_id is not null;
+
+create or replace function public.is_exercise_group_recipient(p_group_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.exercise_templates template
+    join public.exercise_assignments assignment_row on assignment_row.template_id = template.id
+    join public.exercise_assignment_students recipient on recipient.assignment_id = assignment_row.id
+    where template.group_id = p_group_id
+      and recipient.student_id = auth.uid()
+  )
+$$;
+
+alter table public.exercise_groups enable row level security;
+
+drop policy if exists "exercise_groups_read_related" on public.exercise_groups;
+create policy "exercise_groups_read_related" on public.exercise_groups for select to authenticated using (
+  teacher_id = auth.uid()
+  or public.is_school_admin(school_id)
+  or public.is_exercise_group_recipient(id)
+);
+
+drop policy if exists "exercise_groups_teacher_create" on public.exercise_groups;
+create policy "exercise_groups_teacher_create" on public.exercise_groups for insert to authenticated with check (
+  teacher_id = auth.uid() and public.has_school_role(school_id, 'teacher')
+);
+
+drop policy if exists "exercise_groups_teacher_update" on public.exercise_groups;
+create policy "exercise_groups_teacher_update" on public.exercise_groups for update to authenticated
+using (teacher_id = auth.uid() or public.is_school_admin(school_id))
+with check (teacher_id = auth.uid() or public.is_school_admin(school_id));
+
+drop policy if exists "exercise_groups_teacher_delete" on public.exercise_groups;
+create policy "exercise_groups_teacher_delete" on public.exercise_groups for delete to authenticated using (
+  teacher_id = auth.uid() or public.is_school_admin(school_id)
+);
+
 alter table public.exercise_assignments
   add column if not exists homework_id uuid references public.homework(id) on delete cascade;
 
@@ -76,13 +133,16 @@ where template.id = answer_key.template_id
   and template.kind = 'fill_blank'
   and jsonb_typeof(answer_key.answer_data -> 'acceptedAnswers') = 'array';
 
+drop function if exists public.create_exercise_template(uuid, text, text, text, jsonb, jsonb);
+
 create or replace function public.create_exercise_template(
   p_school_id uuid,
   p_kind text,
   p_title text,
   p_prompt text default '',
   p_content jsonb default '{}'::jsonb,
-  p_answer_data jsonb default '{}'::jsonb
+  p_answer_data jsonb default '{}'::jsonb,
+  p_group_id uuid default null
 )
 returns uuid
 language plpgsql security definer set search_path = public
@@ -94,6 +154,7 @@ declare
   v_item jsonb;
   v_answer_item jsonb;
   v_item_id text;
+  v_group public.exercise_groups;
 begin
   if auth.uid() is null or not public.has_school_role(p_school_id, 'teacher') then
     raise exception 'Teacher access required';
@@ -106,6 +167,14 @@ begin
   end if;
   if jsonb_typeof(p_content) <> 'object' or jsonb_typeof(p_answer_data) <> 'object' then
     raise exception 'Invalid exercise data';
+  end if;
+  if p_group_id is not null then
+    select * into v_group
+    from public.exercise_groups
+    where id = p_group_id and school_id = p_school_id;
+    if not found or v_group.teacher_id <> auth.uid() then
+      raise exception 'Exercise group access denied';
+    end if;
   end if;
 
   if p_kind in ('multiple_choice', 'fill_blank') then
@@ -161,8 +230,8 @@ begin
     raise exception 'A secure Wordwall link is required';
   end if;
 
-  insert into public.exercise_templates (school_id, teacher_id, kind, title, prompt, content)
-  values (p_school_id, auth.uid(), p_kind, trim(p_title), coalesce(p_prompt, ''), p_content)
+  insert into public.exercise_templates (school_id, teacher_id, group_id, kind, title, prompt, content)
+  values (p_school_id, auth.uid(), p_group_id, p_kind, trim(p_title), coalesce(p_prompt, ''), p_content)
   returning id into v_template_id;
 
   insert into public.exercise_template_answers (template_id, answer_data)
@@ -325,9 +394,9 @@ $$;
 
 revoke all on function public.create_exercise_assignment(uuid, uuid, uuid[], timestamptz) from public, authenticated;
 revoke all on function public.create_homework_exercise_assignment(uuid, uuid, uuid) from public;
-revoke all on function public.create_exercise_template(uuid, text, text, text, jsonb, jsonb) from public;
+revoke all on function public.create_exercise_template(uuid, text, text, text, jsonb, jsonb, uuid) from public;
 revoke all on function public.submit_exercise_attempt(uuid, jsonb) from public;
 
 grant execute on function public.create_homework_exercise_assignment(uuid, uuid, uuid) to authenticated;
-grant execute on function public.create_exercise_template(uuid, text, text, text, jsonb, jsonb) to authenticated;
+grant execute on function public.create_exercise_template(uuid, text, text, text, jsonb, jsonb, uuid) to authenticated;
 grant execute on function public.submit_exercise_attempt(uuid, jsonb) to authenticated;
