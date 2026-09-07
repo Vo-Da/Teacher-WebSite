@@ -1195,6 +1195,25 @@ textarea:focus {
   gap: 8px;
 }
 
+.exercise-summary,
+.teacher-exercise-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.exercise-summary {
+  padding: 1px 0;
+}
+
+.exercise-homework-content {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 .exercise-question-list {
   display: grid;
   gap: 12px;
@@ -1286,6 +1305,12 @@ textarea:focus {
   border: 1px solid var(--line);
   border-radius: 10px;
   background: #fbfdff;
+}
+
+.teacher-homework-exercise-content {
+  display: grid;
+  gap: 9px;
+  margin-top: 10px;
 }
 
 .teacher-exercise-attempts {
