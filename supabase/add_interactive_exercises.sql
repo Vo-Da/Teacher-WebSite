@@ -5,7 +5,7 @@ create table if not exists public.exercise_templates (
   id uuid primary key default gen_random_uuid(),
   school_id uuid not null references public.schools(id) on delete cascade,
   teacher_id uuid not null references auth.users(id) on delete cascade,
-  kind text not null check (kind in ('multiple_choice', 'fill_blank', 'word_order', 'matching_pairs', 'wordwall')),
+  kind text not null check (kind in ('multiple_choice', 'multiple_select', 'fill_blank', 'word_order', 'matching_pairs', 'wordwall')),
   title text not null check (char_length(trim(title)) between 2 and 200),
   prompt text not null default '' check (char_length(prompt) <= 10000),
   content jsonb not null default '{}'::jsonb check (jsonb_typeof(content) = 'object'),

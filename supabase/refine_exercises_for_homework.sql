@@ -8,7 +8,7 @@ alter table public.exercise_templates
 
 alter table public.exercise_templates
   add constraint exercise_templates_kind_check
-  check (kind in ('multiple_choice', 'fill_blank', 'word_order', 'matching_pairs', 'wordwall'));
+  check (kind in ('multiple_choice', 'multiple_select', 'fill_blank', 'word_order', 'matching_pairs', 'wordwall'));
 
 create table if not exists public.exercise_groups (
   id uuid primary key default gen_random_uuid(),
@@ -170,7 +170,7 @@ begin
   if char_length(trim(p_title)) < 2 then
     raise exception 'Exercise title is required';
   end if;
-  if p_kind not in ('multiple_choice', 'fill_blank', 'word_order', 'matching_pairs', 'wordwall') then
+  if p_kind not in ('multiple_choice', 'multiple_select', 'fill_blank', 'word_order', 'matching_pairs', 'wordwall') then
     raise exception 'Unsupported exercise type';
   end if;
   if jsonb_typeof(p_content) <> 'object' or jsonb_typeof(p_answer_data) <> 'object' then
@@ -185,7 +185,7 @@ begin
     end if;
   end if;
 
-  if p_kind in ('multiple_choice', 'fill_blank', 'word_order', 'matching_pairs') then
+  if p_kind in ('multiple_choice', 'multiple_select', 'fill_blank', 'word_order', 'matching_pairs') then
     v_items := p_content -> 'items';
     v_answer_items := p_answer_data -> 'items';
     if jsonb_typeof(v_items) <> 'array' or jsonb_typeof(v_answer_items) <> 'array' then
@@ -243,6 +243,25 @@ begin
               and trim(coalesce(option_item.value ->> 'text', '')) <> ''
           ) then
           raise exception 'Multiple choice item needs options and a correct answer';
+        end if;
+      elsif p_kind = 'multiple_select' then
+        if jsonb_typeof(v_item -> 'options') <> 'array'
+          or jsonb_typeof(v_answer_item -> 'correctOptionIds') <> 'array' then
+          raise exception 'Multiple select item needs options and correct answers';
+        end if;
+        if jsonb_array_length(v_item -> 'options') < 2
+          or jsonb_array_length(v_answer_item -> 'correctOptionIds') = 0
+          or jsonb_array_length(v_answer_item -> 'correctOptionIds') > jsonb_array_length(v_item -> 'options')
+          or (select count(distinct correct_option.value) from jsonb_array_elements_text(v_answer_item -> 'correctOptionIds') correct_option(value)) <> jsonb_array_length(v_answer_item -> 'correctOptionIds')
+          or exists (
+            select 1 from jsonb_array_elements_text(v_answer_item -> 'correctOptionIds') correct_option(value)
+            where not exists (
+              select 1 from jsonb_array_elements(v_item -> 'options') option_item(value)
+              where option_item.value ->> 'id' = correct_option.value
+                and trim(coalesce(option_item.value ->> 'text', '')) <> ''
+            )
+          ) then
+          raise exception 'Multiple select item needs options and correct answers';
         end if;
       elsif p_kind = 'fill_blank' and jsonb_typeof(v_answer_item -> 'acceptedAnswers') <> 'array' then
         raise exception 'Fill in the blank item needs an accepted answer';
@@ -390,7 +409,7 @@ begin
     raise exception 'Exercise answers are invalid';
   end if;
 
-  if v_kind in ('multiple_choice', 'fill_blank', 'word_order', 'matching_pairs') then
+  if v_kind in ('multiple_choice', 'multiple_select', 'fill_blank', 'word_order', 'matching_pairs') then
     v_total := 0;
     v_score := 0;
     for v_item in select item.value from jsonb_array_elements(coalesce(v_content -> 'items', '[]'::jsonb)) as item(value) loop
@@ -407,6 +426,25 @@ begin
       v_correct := false;
       if v_kind = 'multiple_choice' then
         v_correct := v_submitted_answer <> '' and v_submitted_answer = coalesce(v_answer_item ->> 'correctOptionId', '');
+      elsif v_kind = 'multiple_select' then
+        begin
+          v_submitted_json := coalesce((p_answers ->> v_item_id)::jsonb, '[]'::jsonb);
+        exception when others then
+          v_submitted_json := '[]'::jsonb;
+        end;
+        if v_submitted_answer = '' or jsonb_typeof(v_submitted_json) <> 'array' then
+          v_correct := false;
+        else
+          select jsonb_array_length(v_submitted_json) = jsonb_array_length(v_answer_item -> 'correctOptionIds')
+            and (select count(distinct submitted_option.value) from jsonb_array_elements_text(v_submitted_json) submitted_option(value)) = jsonb_array_length(v_submitted_json)
+            and not exists (
+              select 1 from jsonb_array_elements_text(v_submitted_json) submitted_option(value)
+              where not exists (
+                select 1 from jsonb_array_elements_text(v_answer_item -> 'correctOptionIds') correct_option(value)
+                where correct_option.value = submitted_option.value
+              )
+            ) into v_correct;
+        end if;
       elsif v_kind = 'fill_blank' then
         v_normalized_answer := lower(regexp_replace(v_submitted_answer, '\s+', ' ', 'g'));
         select exists (

@@ -494,6 +494,10 @@
       refreshStudentStatistics(statistics);
       return;
     }
+    if (input.matches?.("[data-multiple-select-option]")) {
+      updateMultipleSelectAnswer(input.closest("[data-multiple-select-question]"));
+      return;
+    }
     if (input.name === "exerciseKind" && input.form?.id === "createExerciseTemplateForm") {
       toggleExerciseTemplateFields(input.form);
       return;
@@ -775,7 +779,7 @@
 
     let content = {};
     let answerData = {};
-    if (["multiple_choice", "fill_blank", "word_order", "matching_pairs"].includes(kind)) {
+    if (["multiple_choice", "multiple_select", "fill_blank", "word_order", "matching_pairs"].includes(kind)) {
       ({ content, answerData } = buildImportedExercise(value(form, "importRows"), kind));
     } else if (kind === "wordwall") {
       content = { url: wordwallUrl(value(form, "wordwallUrl")) };
@@ -1109,12 +1113,13 @@
   function renderExerciseTemplateForm(groups) {
     return `
       <form id="createExerciseTemplateForm" class="stack">
-        <div class="field"><label>Тип вправи</label><select name="exerciseKind"><option value="multiple_choice">Вибрати правильний варіант</option><option value="fill_blank">Вставити пропущене слово</option><option value="word_order">Поставити слова в правильному порядку</option><option value="matching_pairs">Знайти пари</option><option value="wordwall">Wordwall</option></select></div>
+        <div class="field"><label>Тип вправи</label><select name="exerciseKind"><option value="multiple_choice">Вибрати правильний варіант</option><option value="multiple_select">Обрати всі правильні варіанти</option><option value="fill_blank">Вставити пропущене слово</option><option value="word_order">Поставити слова в правильному порядку</option><option value="matching_pairs">Знайти пари</option><option value="wordwall">Wordwall</option></select></div>
         <div class="field"><label>Група / тема <span class="field-optional">(необов’язково)</span></label><select name="groupId"><option value="">Без групи</option>${groups.map((group) => `<option value="${group.id}">${escape(group.name)}</option>`).join("")}</select></div>
         <div class="field"><label>Назва вправи</label><input name="title" maxlength="200" placeholder="Наприклад, Present Simple: повторення" /></div>
         <div class="field"><label>Текст / інструкція <span class="field-optional">(необов’язково)</span></label><textarea name="prompt" maxlength="10000" placeholder="Напиши запитання, речення з пропуском або коротку інструкцію."></textarea></div>
         <div class="exercise-import-fields" data-exercise-import-fields><div class="field"><label>Рядки вправи</label><textarea name="importRows" data-exercise-import-input rows="10" placeholder="She ___ to school. / go;goes;going;gone / goes"></textarea></div><button class="btn small secondary" type="button" data-action="preview-exercise-import">Перевірити рядки</button><div class="exercise-import-preview" data-exercise-import-preview></div></div>
         <div class="exercise-kind-fields is-visible" data-exercise-kind-fields="multiple_choice"><div class="filebox"><strong>Формат для вибору варіанту</strong><br><code>Речення / варіант 1;варіант 2;... / правильний варіант</code><br><span class="meta">Кожен рядок - окреме завдання. Максимум 30 рядків.</span></div></div>
+        <div class="exercise-kind-fields" data-exercise-kind-fields="multiple_select"><div class="filebox"><strong>Формат для кількох правильних варіантів</strong><br><code>Which are colours? / red;book;blue;green / red;blue;green</code><br><span class="meta">Правильні варіанти в останній колонці розділяй символом <code>;</code>. Учень повинен обрати всі правильні відповіді. Максимум 30 завдань.</span></div></div>
         <div class="exercise-kind-fields" data-exercise-kind-fields="fill_blank"><div class="filebox"><strong>Формат для пропуску</strong><br><code>Речення /  / правильна відповідь;допустима відповідь</code><br><span class="meta">Середня колонка лишається порожньою. Максимум 30 рядків.</span></div></div>
         <div class="exercise-kind-fields" data-exercise-kind-fields="word_order"><div class="filebox"><strong>Формат для порядку слів</strong><br><code>She / goes / to / school / every / day.</code><br><span class="meta">Один рядок - одне речення. Слова мають бути в правильному порядку; учень отримає їх перемішаними. Максимум 30 речень.</span></div></div>
         <div class="exercise-kind-fields" data-exercise-kind-fields="matching_pairs"><div class="filebox"><strong>Формат для пар</strong><br><code>go / went</code><br><span class="meta">Один рядок - одна пара. Учень побачить дві перемішані колонки. Для однієї вправи додай від 2 до 30 пар.</span></div></div>
@@ -1314,10 +1319,11 @@
     const result = typeof attempt.results?.[item.id] === "boolean" ? attempt.results[item.id] : null;
     const stateClass = result === true ? "is-correct" : result === false ? "is-incorrect" : "";
     const label = result === true ? "Правильно" : result === false ? "Помилка" : answer ? "Відповідь без автоматичної оцінки" : "Відповіді немає";
-    if (kind === "multiple_choice") {
+    if (kind === "multiple_choice" || kind === "multiple_select") {
       const options = Array.isArray(item.options) ? item.options : [];
+      const selectedIds = kind === "multiple_select" ? parseExerciseAnswerArray(answer) : [answer];
       return `<section class="teacher-exercise-question ${stateClass}"><strong>${number}. ${escape(item.prompt)}</strong><div class="teacher-exercise-options">${options.map((option) => {
-        const selected = answer === option.id;
+        const selected = selectedIds.includes(option.id);
         return `<div class="teacher-exercise-option ${selected ? stateClass : ""}">${escape(option.text)}${selected ? '<span>Відповідь учня</span>' : ""}</div>`;
       }).join("")}</div><p class="exercise-feedback ${stateClass}">${label}</p></section>`;
     }
@@ -1391,8 +1397,27 @@
         return `<label class="exercise-option${optionClass}"><input type="radio" name="answer-${escapeAttr(item.id)}" value="${escapeAttr(option.id)}" ${isSelected ? "checked" : ""} />${escape(option.text)}</label>`;
       }).join("")}</div>${feedback}</fieldset>`;
     }
+    if (kind === "multiple_select") return renderMultipleSelectQuestion(item, number, answer, result, feedback);
     if (kind === "word_order") return renderWordOrderQuestion(item, number, answer, result, feedback);
     return `<div class="exercise-question ${result === true ? "is-correct" : result === false ? "is-incorrect" : ""}"><label>${number}. ${escape(item.prompt)}<input class="${result === true ? "is-correct" : result === false ? "is-incorrect" : ""}" name="answer-${escapeAttr(item.id)}" value="${escapeAttr(answer)}" autocomplete="off" /></label>${feedback}</div>`;
+  }
+
+  function renderMultipleSelectQuestion(item, number, rawAnswer, result, feedback) {
+    const options = Array.isArray(item.options) ? item.options.filter((option) => option?.id && option?.text) : [];
+    const optionIds = new Set(options.map((option) => option.id));
+    const selectedIds = parseExerciseAnswerArray(rawAnswer).filter((optionId) => optionIds.has(optionId));
+    return `<fieldset class="exercise-question ${result === true ? "is-correct" : result === false ? "is-incorrect" : ""}" data-multiple-select-question><legend>${number}. ${escape(item.prompt)}</legend><input type="hidden" name="answer-${escapeAttr(item.id)}" value="${escapeAttr(JSON.stringify(selectedIds))}" /><div class="exercise-options">${options.map((option) => {
+      const selected = selectedIds.includes(option.id);
+      const optionClass = selected && result === true ? " is-correct" : selected && result === false ? " is-incorrect" : "";
+      return `<label class="exercise-option${optionClass}"><input type="checkbox" data-multiple-select-option data-option-id="${escapeAttr(option.id)}" ${selected ? "checked" : ""} />${escape(option.text)}</label>`;
+    }).join("")}</div>${feedback}</fieldset>`;
+  }
+
+  function updateMultipleSelectAnswer(question) {
+    if (!question) return;
+    const selectedIds = Array.from(question.querySelectorAll("[data-multiple-select-option]:checked")).map((option) => option.dataset.optionId);
+    const answer = question.querySelector('input[type="hidden"][name^="answer-"]');
+    if (answer) answer.value = JSON.stringify(selectedIds);
   }
 
   function renderWordOrderQuestion(item, number, rawAnswer, result, feedback) {
@@ -1951,14 +1976,18 @@
       if (!acceptedAnswers.length) throw new Error(`Рядок ${rowNumber}: додай правильну відповідь у третій колонці.`);
 
       const itemId = `q${rowNumber}`;
-      if (kind === "multiple_choice") {
+      if (kind === "multiple_choice" || kind === "multiple_select") {
         const optionTexts = optionsValue.split(";").map((option) => option.trim()).filter(Boolean);
         if (optionTexts.length < 2) throw new Error(`Рядок ${rowNumber}: для вибору варіанту потрібно щонайменше дві відповіді.`);
-        if (acceptedAnswers.length !== 1) throw new Error(`Рядок ${rowNumber}: для вибору варіанту вкажи одну правильну відповідь.`);
-        const correctIndex = optionTexts.findIndex((option) => normalizedExerciseAnswer(option) === normalizedExerciseAnswer(acceptedAnswers[0]));
-        if (correctIndex < 0) throw new Error(`Рядок ${rowNumber}: правильна відповідь має збігатися з одним із варіантів.`);
+        if (kind === "multiple_choice" && acceptedAnswers.length !== 1) throw new Error(`Рядок ${rowNumber}: для вибору варіанту вкажи одну правильну відповідь.`);
         const options = optionTexts.map((text, optionIndex) => ({ id: `${itemId}-o${optionIndex + 1}`, text }));
-        return { id: itemId, prompt, options, acceptedAnswers: [options[correctIndex].id] };
+        const correctOptionIds = acceptedAnswers.map((acceptedAnswer) => {
+          const option = options.find((candidate) => normalizedExerciseAnswer(candidate.text) === normalizedExerciseAnswer(acceptedAnswer));
+          if (!option) throw new Error(`Рядок ${rowNumber}: кожна правильна відповідь має збігатися з одним із варіантів.`);
+          return option.id;
+        });
+        if (new Set(correctOptionIds).size !== correctOptionIds.length) throw new Error(`Рядок ${rowNumber}: не дублюй правильні варіанти.`);
+        return { id: itemId, prompt, options, acceptedAnswers: correctOptionIds };
       }
 
       if (kind === "fill_blank") {
@@ -2003,6 +2032,12 @@
       return {
         content: { items: rows.map(({ id, prompt, options }) => ({ id, prompt, options })) },
         answerData: { items: rows.map(({ id, acceptedAnswers }) => ({ id, correctOptionId: acceptedAnswers[0] })) }
+      };
+    }
+    if (kind === "multiple_select") {
+      return {
+        content: { items: rows.map(({ id, prompt, options }) => ({ id, prompt, options })) },
+        answerData: { items: rows.map(({ id, acceptedAnswers }) => ({ id, correctOptionIds: acceptedAnswers })) }
       };
     }
     if (kind === "word_order") {
@@ -2094,7 +2129,7 @@
   }
 
   function exerciseKindLabel(kind) {
-    return { multiple_choice: "Вибір варіанту", fill_blank: "Пропущене слово", word_order: "Порядок слів", matching_pairs: "Пари", wordwall: "Wordwall" }[kind] || "Вправа";
+    return { multiple_choice: "Вибір варіанту", multiple_select: "Кілька варіантів", fill_blank: "Пропущене слово", word_order: "Порядок слів", matching_pairs: "Пари", wordwall: "Wordwall" }[kind] || "Вправа";
   }
 
   function exerciseStatusLabel(status) {
@@ -2114,6 +2149,7 @@
     const importInput = form.querySelector("[data-exercise-import-input]");
     if (importInput) importInput.placeholder = {
       multiple_choice: "She ___ to school. / go;goes;going;gone / goes",
+      multiple_select: "Which are colours? / red;book;blue;green / red;blue;green",
       fill_blank: "She ___ to school. /  / goes",
       word_order: "She / goes / to / school / every / day.",
       matching_pairs: "go / went"
@@ -2493,6 +2529,7 @@
     if (text.includes("Fill in the blank needs")) return "Додай хоча б один правильний варіант відповіді.";
     if (text.includes("Exercise items are invalid") || text.includes("Each exercise item needs") || text.includes("Exercise question ids must be unique")) return "Перевір рядки вправи: кожне завдання має мати текст і правильну відповідь.";
     if (text.includes("Multiple choice item needs")) return "У кожному рядку з вибором варіанту має бути щонайменше два варіанти та правильна відповідь.";
+    if (text.includes("Multiple select item needs")) return "У кожному рядку додай щонайменше два варіанти та один або кілька правильних варіантів.";
     if (text.includes("Fill in the blank item needs")) return "У кожному рядку з пропущеним словом додай хоча б одну правильну відповідь.";
     if (text.includes("Word order item needs")) return "У кожному реченні додай щонайменше два різні слова в правильному порядку.";
     if (text.includes("Matching pairs need") || text.includes("Matching pair needs")) return "Для вправи з парами додай щонайменше дві повні унікальні пари.";
