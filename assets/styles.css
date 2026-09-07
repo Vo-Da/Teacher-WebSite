@@ -1200,6 +1200,48 @@ select[multiple] {
 }
 
 .media-capture {
+  width: fit-content;
+}
+
+.media-capture-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.media-capture-compact {
+  border: 1px solid #b8ded9;
+  border-radius: 8px;
+  padding: 7px 10px;
+  color: #0f766e;
+  background: #f1faf8;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.media-capture-compact:hover {
+  border-color: var(--accent);
+  background: #e5f6f3;
+}
+
+.media-capture-details {
+  display: none;
+}
+
+.media-capture.is-active,
+.media-capture.has-recording {
+  width: 100%;
+}
+
+.media-capture.is-active .media-capture-compact,
+.media-capture.has-recording .media-capture-compact {
+  display: none;
+}
+
+.media-capture.is-active .media-capture-details,
+.media-capture.has-recording .media-capture-details {
   display: grid;
   gap: 8px;
   padding: 11px;

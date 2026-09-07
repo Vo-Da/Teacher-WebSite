@@ -581,7 +581,7 @@
     const homeworkTitle = value(form, "homeworkTitle");
     const homeworkDescription = value(form, "homeworkDescription");
     const homeworkDeadline = value(form, "homeworkDeadline");
-    const hasHomeworkFiles = hasSelectedFiles(form, '[name="homeworkFiles"], [data-recorded-media]');
+    const hasHomeworkFiles = hasSelectedFiles(form, '[name="homeworkFiles"], [data-recorded-media][data-capture-target="homework"]');
     const hasHomeworkDetails = homeworkTitle || homeworkDescription || homeworkDeadline || hasHomeworkFiles;
     if (hasHomeworkDetails && !homeworkTitle) throw new Error("Щоб опублікувати домашнє, додай його назву.");
 
@@ -601,9 +601,9 @@
         p_student_ids: lessonStudents(lessonId).map((row) => row.student_id)
       });
       if (homeworkError) throw homeworkError;
-      await uploadInputFiles(form, { homework_id: data }, '[name="homeworkFiles"], [data-recorded-media]');
+      await uploadInputFiles(form, { homework_id: data }, '[name="homeworkFiles"], [data-recorded-media][data-capture-target="homework"]');
     }
-    await uploadInputFiles(form, { lesson_id: lessonId }, '[name="lessonFiles"]');
+    await uploadInputFiles(form, { lesson_id: lessonId }, '[name="lessonFiles"], [data-recorded-media][data-capture-target="lesson"]');
     state.notice = success(hasHomeworkDetails ? "Картку заняття й домашнє збережено." : "Картку заняття збережено. За потреби фінансовий запис створено автоматично.");
     await refreshContext();
   }
@@ -977,8 +977,8 @@
         <div class="item"><div class="item-head"><div><p class="item-title">${escape(subjectName(lesson.subject_id))} · ${escape(lesson.title)}</p><div class="meta">${escape(formatDateTime(lesson.starts_at))} — ${escape(formatTime(lesson.ends_at))}</div><div class="meta">${escape(participants.map((row) => nameOf(row.student_id)).join(", "))}</div></div>${statusBadge(lesson.status)}</div>${lesson.meeting_url ? `<a href="${escapeAttr(lesson.meeting_url)}" target="_blank" rel="noopener">Відкрити зустріч</a>` : ""}${renderAttachments({ lesson_id: lesson.id })}</div>
         <form id="lessonCardForm" class="stack" style="margin-top:12px;"><input type="hidden" name="lessonId" value="${lesson.id}" />
           <div class="field"><label>Статус</label><select name="status">${lessonStatusOptions(lesson.status)}</select></div>
-          <div class="field"><label>Нотатки викладача</label><textarea name="teacherNote" placeholder="Що пройшли, що повторити наступного разу">${escape(lesson.teacher_note || "")}</textarea></div>
-          <div class="filebox stack"><strong>Домашнє до цього уроку <span class="field-optional">(необов’язково)</span></strong><div class="field"><label>Назва</label><input name="homeworkTitle" /></div><div class="field"><label>Опис</label><textarea name="homeworkDescription"></textarea></div><div class="field"><label>Дедлайн</label><input name="homeworkDeadline" type="datetime-local" /></div>${renderVoiceCapture(`homework-${lesson.id}`, "Голосова інструкція")}${renderVideoCapture(`homework-video-${lesson.id}`, "Відеоінструкція")}<div class="field"><label>Файли до домашнього</label><input name="homeworkFiles" type="file" multiple accept="${supportedFileAccept()}" /></div></div>
+          <div class="field"><label>Нотатки викладача</label><textarea name="teacherNote" placeholder="Що пройшли, що повторити наступного разу">${escape(lesson.teacher_note || "")}</textarea></div><div class="media-capture-row">${renderVoiceCapture(`lesson-note-${lesson.id}`, "Голосова нотатка", "lesson")}${renderVideoCapture(`lesson-note-video-${lesson.id}`, "Відеонотатка", "lesson")}</div>
+          <div class="filebox stack"><strong>Домашнє до цього уроку <span class="field-optional">(необов’язково)</span></strong><div class="field"><label>Назва</label><input name="homeworkTitle" /></div><div class="field"><label>Опис</label><textarea name="homeworkDescription"></textarea></div><div class="field"><label>Дедлайн</label><input name="homeworkDeadline" type="datetime-local" /></div><div class="media-capture-row">${renderVoiceCapture(`homework-${lesson.id}`, "Голосова інструкція", "homework")}${renderVideoCapture(`homework-video-${lesson.id}`, "Відеоінструкція", "homework")}</div><div class="field"><label>Файли до домашнього</label><input name="homeworkFiles" type="file" multiple accept="${supportedFileAccept()}" /></div></div>
           <div class="filebox stack"><strong>Матеріали до уроку <span class="field-optional">(необов’язково)</span></strong><input name="lessonFiles" type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.docx" /></div>
           <button class="btn primary" type="submit">Зберегти картку заняття</button>
         </form>
@@ -1068,15 +1068,15 @@
     return `<div class="attachment-list">${files.map((file) => `<button class="attachment" type="button" data-action="download-file" data-file-id="${file.id}">Завантажити: ${escape(file.original_name)}${file.byte_size ? ` <span>${formatBytes(file.byte_size)}</span>` : ""}</button>`).join("")}</div>`;
   }
 
-  function renderVoiceCapture(captureId, label) {
-    return renderMediaCapture(captureId, label, "audio");
+  function renderVoiceCapture(captureId, label, target = "homework") {
+    return renderMediaCapture(captureId, label, "audio", target);
   }
 
-  function renderVideoCapture(captureId, label) {
-    return renderMediaCapture(captureId, label, "video");
+  function renderVideoCapture(captureId, label, target = "homework") {
+    return renderMediaCapture(captureId, label, "video", target);
   }
 
-  function renderMediaCapture(captureId, label, kind) {
+  function renderMediaCapture(captureId, label, kind, target) {
     const isVideo = kind === "video";
     const accept = isVideo ? "video/webm,video/mp4" : "audio/webm,audio/ogg,audio/mp4,audio/mpeg";
     const helper = isVideo
@@ -1084,11 +1084,9 @@
       : "Запиши відповідь у браузері: аудіофайл додасться до форми після зупинки запису.";
     return `
       <div class="media-capture" data-media-capture="${escapeAttr(captureId)}" data-capture-kind="${kind}">
-        <div><strong>${escape(label)}</strong><div class="meta">${helper}</div></div>
-        <input type="file" hidden data-recorded-media="${escapeAttr(captureId)}" accept="${accept}" />
-        <div class="media-capture-actions"><button class="btn small secondary" type="button" data-action="start-media-recording" data-capture-id="${escapeAttr(captureId)}">Почати запис</button><button class="btn small danger" type="button" data-action="stop-media-recording" data-capture-id="${escapeAttr(captureId)}" disabled>Зупинити</button><button class="btn small secondary" type="button" data-action="clear-media-recording" disabled>Видалити запис</button></div>
-        <div class="media-preview" data-capture-preview></div>
-        <div class="meta" data-capture-status>Запис ще не додано.</div>
+        <button class="media-capture-compact" type="button" data-action="start-media-recording" data-capture-id="${escapeAttr(captureId)}">${isVideo ? "Додати відео" : "Додати аудіо"}</button>
+        <input type="file" hidden data-recorded-media="${escapeAttr(captureId)}" data-capture-target="${escapeAttr(target)}" accept="${accept}" />
+        <div class="media-capture-details"><div><strong>${escape(label)}</strong><div class="meta">${helper}</div></div><div class="media-capture-actions"><button class="btn small secondary" type="button" data-action="start-media-recording" data-capture-id="${escapeAttr(captureId)}">Почати запис</button><button class="btn small danger" type="button" data-action="stop-media-recording" data-capture-id="${escapeAttr(captureId)}" disabled>Зупинити</button><button class="btn small secondary" type="button" data-action="clear-media-recording" disabled>Видалити запис</button></div><div class="media-preview" data-capture-preview></div><div class="meta" data-capture-status>Запис ще не додано.</div></div>
       </div>
     `;
   }
@@ -1101,12 +1099,13 @@
     const captureId = trigger.dataset.captureId;
     const capture = trigger.closest("[data-media-capture]");
     if (!capture || !captureId) throw new Error("Не вдалося підготувати запис.");
-    if (state.recording) throw new Error("Спершу зупини поточний запис голосу.");
+    if (state.recording) throw new Error("Спершу зупини поточний запис.");
     const kind = capture.dataset.captureKind || "audio";
     if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) throw new Error("Цей браузер не підтримує запис. Додай файл вручну.");
 
     const stream = await navigator.mediaDevices.getUserMedia(kind === "video" ? { audio: true, video: true } : { audio: true });
     clearMediaRecording(capture, false);
+    capture.classList.add("is-active");
     const recorder = new MediaRecorder(stream);
     const chunks = [];
     const status = capture.querySelector("[data-capture-status]");
@@ -1119,8 +1118,9 @@
     recorder.addEventListener("error", () => {
       stream.getTracks().forEach((track) => track.stop());
       state.recording = null;
-      trigger.disabled = false;
-      trigger.textContent = "Почати запис";
+      capture.classList.remove("is-active", "has-recording");
+      clearMediaPreview(capture);
+      setCaptureStartButtons(capture, "Почати запис", false);
       if (stopButton) stopButton.disabled = true;
       if (clearButton) clearButton.disabled = true;
       if (status) status.textContent = "Не вдалося завершити запис. Спробуй ще раз або додай файл вручну.";
@@ -1137,18 +1137,17 @@
       }
       setMediaPreview(capture, recordingFile);
       state.recording = null;
-      trigger.disabled = false;
-      trigger.textContent = "Перезаписати";
+      setCaptureStartButtons(capture, "Перезаписати", false);
       if (stopButton) stopButton.disabled = true;
       if (clearButton) clearButton.disabled = false;
       if (status) status.textContent = `Запис додано: ${recordingFile.name} (${formatBytes(recordingFile.size)}). Він завантажиться після надсилання форми.`;
     });
     state.recording = { captureId, recorder, stream };
-    trigger.disabled = true;
-    trigger.textContent = "Йде запис...";
+    setCaptureStartButtons(capture, "Йде запис...", true);
     if (stopButton) stopButton.disabled = false;
     if (clearButton) clearButton.disabled = true;
     if (status) status.textContent = kind === "video" ? "Йде запис відео..." : "Йде запис голосу...";
+    if (kind === "video") setLiveMediaPreview(capture, stream);
     recorder.start();
   }
 
@@ -1161,33 +1160,55 @@
     const capture = triggerOrCapture?.matches?.("[data-media-capture]") ? triggerOrCapture : triggerOrCapture?.closest?.("[data-media-capture]");
     if (!capture) return;
     const input = capture.querySelector("input[data-recorded-media]");
-    const preview = capture.querySelector("[data-capture-preview]");
     const status = capture.querySelector("[data-capture-status]");
-    const startButton = capture.querySelector('[data-action="start-media-recording"]');
     const clearButton = capture.querySelector('[data-action="clear-media-recording"]');
-    if (preview?.dataset.objectUrl) URL.revokeObjectURL(preview.dataset.objectUrl);
-    if (preview) {
-      preview.innerHTML = "";
-      delete preview.dataset.objectUrl;
-    }
+    capture.classList.remove("is-active", "has-recording");
+    clearMediaPreview(capture);
     if (input) input.value = "";
-    if (startButton && !state.recording) {
-      startButton.disabled = false;
-      startButton.textContent = "Почати запис";
-    }
+    if (!state.recording) setCaptureStartButtons(capture, "Почати запис", false);
     if (clearButton) clearButton.disabled = true;
     if (status) status.textContent = announce ? "Запис видалено. Можна записати новий." : "Запис ще не додано.";
+  }
+
+  function setCaptureStartButtons(capture, label, disabled) {
+    capture.querySelectorAll('[data-action="start-media-recording"]').forEach((button) => {
+      button.disabled = disabled;
+      button.textContent = label;
+    });
+  }
+
+  function clearMediaPreview(capture) {
+    const preview = capture.querySelector("[data-capture-preview]");
+    if (!preview) return;
+    if (preview.dataset.objectUrl) URL.revokeObjectURL(preview.dataset.objectUrl);
+    const media = preview.querySelector("audio, video");
+    if (media?.srcObject) media.srcObject = null;
+    preview.innerHTML = "";
+    delete preview.dataset.objectUrl;
   }
 
   function setMediaPreview(capture, file) {
     const preview = capture.querySelector("[data-capture-preview]");
     if (!preview) return;
-    if (preview.dataset.objectUrl) URL.revokeObjectURL(preview.dataset.objectUrl);
+    clearMediaPreview(capture);
     const objectUrl = URL.createObjectURL(file);
     preview.dataset.objectUrl = objectUrl;
     const element = capture.dataset.captureKind === "video" ? "video" : "audio";
     const fallback = element === "video" ? "Ваш браузер не підтримує відтворення відео." : "Ваш браузер не підтримує відтворення аудіо.";
     preview.innerHTML = `<${element} controls preload="metadata" src="${escapeAttr(objectUrl)}">${fallback}</${element}>`;
+    capture.classList.remove("is-active");
+    capture.classList.add("has-recording");
+  }
+
+  function setLiveMediaPreview(capture, stream) {
+    const preview = capture.querySelector("[data-capture-preview]");
+    if (!preview) return;
+    clearMediaPreview(capture);
+    preview.innerHTML = '<video autoplay muted playsinline aria-label="Попередній перегляд відеозапису"></video>';
+    const video = preview.querySelector("video");
+    if (!video) return;
+    video.srcObject = stream;
+    void video.play().catch(() => {});
   }
 
   function hasSelectedFiles(form, selector = 'input[type="file"]') {
@@ -1468,7 +1489,7 @@
           </div>
           <button class="btn primary" type="submit">Зберегти картку та нотатку</button>
         </form>
-        ${renderStudentStatistics(studentId)}
+        ${state.activeRole === "admin" ? renderStudentStatistics(studentId) : ""}
       </section>
     `;
   }
