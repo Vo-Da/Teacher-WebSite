@@ -21,6 +21,8 @@
     homeworkFilters: { studentStatus: "all", teacherStatus: "all", teacherStudentId: "all" },
     exerciseGroupsAvailable: true,
     recording: null,
+    showPasswordRecoveryRequest: false,
+    passwordRecovery: new URLSearchParams(window.location.search).has("password-recovery"),
     notice: null,
     loading: false
   };
@@ -72,8 +74,10 @@
     });
     const { data } = await state.client.auth.getSession();
     state.session = data.session;
-    state.client.auth.onAuthStateChange((_event, session) => {
+    state.client.auth.onAuthStateChange((event, session) => {
       state.session = session;
+      if (event === "PASSWORD_RECOVERY") state.passwordRecovery = true;
+      if (event === "SIGNED_OUT") state.passwordRecovery = false;
       void refreshContext();
     });
     await refreshContext();
@@ -99,7 +103,16 @@
 
     if (!state.session) {
       state.activeRole = null;
+      if (state.passwordRecovery) {
+        state.passwordRecovery = false;
+        state.notice = failure("Посилання для відновлення пароля недійсне або вже використане. Спробуй надіслати нове.");
+      }
       renderAuth();
+      return;
+    }
+
+    if (state.passwordRecovery) {
+      renderPasswordRecovery();
       return;
     }
 
@@ -253,13 +266,14 @@
           <div class="brand">${brandMark()}<div><div class="brand-title">${escape(config.schoolName || "Teacher Portal")}</div><div class="brand-sub">Кабінет школи</div></div></div>
           ${renderNotice()}
           <div class="auth-columns">
-            <form id="loginForm" class="stack card plain-card">
+            ${state.showPasswordRecoveryRequest ? `<form id="passwordRecoveryRequestForm" class="stack card plain-card"><div class="auth-login-emblem">${brandMark("auth-login-mark")}</div><h2>Відновити пароль</h2><p class="muted">Вкажи email. Якщо акаунт існує, ми надішлемо безпечне посилання для зміни пароля.</p><div class="field"><label>Email</label><input name="email" type="email" required autocomplete="email" /></div><button class="btn primary" type="submit">Надіслати посилання</button><button class="btn small secondary" type="button" data-action="close-password-recovery">Повернутися до входу</button></form>` : `<form id="loginForm" class="stack card plain-card">
               <div class="auth-login-emblem">${brandMark("auth-login-mark")}</div>
               <h2>Вхід</h2>
               <div class="field"><label>Email</label><input name="email" type="email" required autocomplete="email" /></div>
               <div class="field"><label>Пароль</label><input name="password" type="password" required autocomplete="current-password" /></div>
               <button class="btn primary" type="submit">Увійти</button>
-            </form>
+              <button class="btn small secondary" type="button" data-action="open-password-recovery">Забули пароль?</button>
+            </form>`}
             <form id="registerForm" class="stack card plain-card">
               <h2>Реєстрація</h2>
               <div class="field"><label>Ім’я та прізвище</label><input name="fullName" required /></div>
@@ -303,6 +317,26 @@
     `);
   }
 
+  function renderPasswordRecovery() {
+    root.innerHTML = shell(`
+      <section class="auth-shell">
+        <div class="auth-card">
+          <div class="brand">${brandMark()}<div><div class="brand-title">${escape(config.schoolName || "Teacher Portal")}</div><div class="brand-sub">Відновлення доступу</div></div></div>
+          ${renderNotice()}
+          <div class="card plain-card">
+            <h1>Створи новий пароль</h1>
+            <p class="muted">Введи новий пароль для ${escape(state.session?.user?.email || "свого акаунта")}.</p>
+            ${renderPasswordChangeForm()}
+          </div>
+        </div>
+      </section>
+    `);
+  }
+
+  function renderPasswordChangeForm() {
+    return '<form id="changePasswordForm" class="stack"><div class="field"><label>Новий пароль</label><input name="newPassword" type="password" minlength="8" required autocomplete="new-password" /></div><div class="field"><label>Повтори новий пароль</label><input name="confirmPassword" type="password" minlength="8" required autocomplete="new-password" /></div><button class="btn primary" type="submit">Зберегти новий пароль</button></form>';
+  }
+
   function renderFatal(message) {
     root.innerHTML = shell(`<section class="auth-shell"><div class="auth-card"><h1>Потрібна увага</h1><div class="msg error">${escape(message)}</div></div></section>`);
   }
@@ -322,6 +356,16 @@
     try {
       if (action === "logout") {
         await state.client.auth.signOut();
+        return;
+      }
+      if (action === "open-password-recovery") {
+        state.showPasswordRecoveryRequest = true;
+        renderAuth();
+        return;
+      }
+      if (action === "close-password-recovery") {
+        state.showPasswordRecoveryRequest = false;
+        renderAuth();
         return;
       }
       if (action === "set-view") {
@@ -537,6 +581,8 @@
     event.preventDefault();
     try {
       if (form.id === "loginForm") await login(form);
+      if (form.id === "passwordRecoveryRequestForm") await requestPasswordRecovery(form);
+      if (form.id === "changePasswordForm") await changePassword(form);
       if (form.id === "registerForm") await register(form);
       if (form.id === "requestMembershipForm") await requestMembership(form);
       if (form.id === "bootstrapSchoolForm") await bootstrapSchool(form);
@@ -568,6 +614,42 @@
     });
     if (error) throw error;
     state.notice = success("Вхід виконано.");
+  }
+
+  async function requestPasswordRecovery(form) {
+    const { error } = await state.client.auth.resetPasswordForEmail(value(form, "email"), {
+      redirectTo: passwordRecoveryRedirectUrl()
+    });
+    if (error) throw error;
+    state.showPasswordRecoveryRequest = false;
+    state.notice = success("Якщо такий email зареєстрований, на нього надіслано посилання для зміни пароля.");
+    renderAuth();
+  }
+
+  async function changePassword(form) {
+    const newPassword = value(form, "newPassword");
+    const confirmPassword = value(form, "confirmPassword");
+    if (newPassword.length < 8) throw new Error("Новий пароль має містити щонайменше 8 символів.");
+    if (newPassword !== confirmPassword) throw new Error("Новий пароль і його повтор не збігаються.");
+    const { error } = await state.client.auth.updateUser({ password: newPassword });
+    if (error) throw error;
+    state.passwordRecovery = false;
+    clearPasswordRecoveryUrl();
+    state.notice = success("Пароль успішно змінено.");
+    await refreshContext();
+  }
+
+  function passwordRecoveryRedirectUrl() {
+    const url = new URL(window.location.href);
+    url.searchParams.set("password-recovery", "1");
+    return url.toString();
+  }
+
+  function clearPasswordRecoveryUrl() {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("password-recovery");
+    url.searchParams.delete("code");
+    window.history.replaceState({}, document.title, `${url.pathname}${url.search}`);
   }
 
   async function register(form) {
@@ -1852,7 +1934,8 @@
   }
 
   function renderCurrent() {
-    if (state.membership && state.school) renderDashboard();
+    if (state.passwordRecovery && state.session) renderPasswordRecovery();
+    else if (state.membership && state.school) renderDashboard();
     else if (state.session) renderOnboarding(null);
     else renderAuth();
   }
@@ -2519,6 +2602,9 @@
 
   function friendlyError(error) {
     const text = String(error?.message || error?.error_description || error || "Невідома помилка");
+    if (/current password.*incorrect|incorrect.*current password/i.test(text)) return "Поточний пароль введено неправильно.";
+    if (/password.*different|different.*password/i.test(text)) return "Новий пароль має відрізнятися від поточного.";
+    if (/auth session missing|invalid or expired/i.test(text)) return "Сеанс для зміни пароля завершився. Надішли нове посилання для відновлення.";
     if (error?.name === "NotAllowedError") return "Браузер не отримав доступ до мікрофона. Дозволь його у налаштуваннях сайту та спробуй ще раз.";
     if (error?.name === "NotFoundError") return "Мікрофон не знайдено. Під’єднай його або додай аудіофайл вручну.";
     if (text.includes("No active price")) return "Для цього учня немає активного тарифу. Адміністратор має вказати ціну уроку.";
