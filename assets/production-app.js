@@ -28,6 +28,7 @@
   document.addEventListener("click", handleClick);
   document.addEventListener("submit", handleSubmit);
   document.addEventListener("change", handleChange);
+  document.addEventListener("input", handleInput);
 
   void initialize();
 
@@ -483,6 +484,24 @@
     if (!endInput || Number.isNaN(start.getTime())) return;
     start.setHours(start.getHours() + 1);
     endInput.value = dateTimeInputValue(start);
+  }
+
+  function handleInput(event) {
+    const input = event.target;
+    if (!input.matches?.("[data-exercise-template-search]")) return;
+    const picker = input.closest("[data-exercise-template-picker]");
+    if (!picker) return;
+    const search = normalizedExerciseSearch(input.value);
+    picker.querySelectorAll("[data-exercise-template-group]").forEach((group) => {
+      const groupMatches = String(group.dataset.groupSearch || "").includes(search);
+      const options = Array.from(group.querySelectorAll("[data-exercise-template-option]"));
+      const hasMatchingOption = options.some((option) => String(option.dataset.exerciseSearch || "").includes(search));
+      group.hidden = Boolean(search) && !groupMatches && !hasMatchingOption;
+      options.forEach((option) => {
+        option.hidden = Boolean(search) && !groupMatches && !String(option.dataset.exerciseSearch || "").includes(search);
+      });
+      if (search && !group.hidden) group.open = true;
+    });
   }
 
   async function handleSubmit(event) {
@@ -1192,11 +1211,24 @@
         <div class="field"><label>Пов’язати із заняттям <span class="field-optional">(необов’язково)</span></label><select name="lessonId"><option value="">Без прив’язки</option>${state.data.lessons.filter((lesson) => lesson.teacher_id === state.session.user.id).map((lesson) => `<option value="${lesson.id}" ${selected?.id === lesson.id ? "selected" : ""}>${escape(homeworkLessonLabel(lesson))}</option>`).join("")}</select></div>
         <div class="field"><label>Текст <span class="field-optional">(необов’язково)</span></label><textarea name="description" placeholder="Напиши інструкцію або залиш поле порожнім, якщо додаси файл чи запис."></textarea></div><div class="field"><label>Дедлайн <span class="field-optional">(необов’язково)</span></label><input name="deadline" type="datetime-local" /></div>
         ${selectField("studentIds", "Учні (лише якщо без заняття)", students.map((student) => ({ user_id: student.id })), false, null, true)}
-        ${templates.length ? `<div class="filebox stack"><strong>Вправи з бібліотеки <span class="field-optional">(необов’язково)</span></strong><select name="exerciseTemplateIds" multiple size="4">${templates.map((template) => `<option value="${template.id}">${escape(exerciseTemplateLabel(template))} · ${escape(exerciseKindLabel(template.kind))}</option>`).join("")}</select><div class="meta">Обрані вправи з’являться в цьому домашньому для кожного учня.</div></div>` : ""}
+        ${templates.length ? renderHomeworkExercisePicker(templates) : ""}
         ${renderVoiceCapture(`homework-${selected?.id || "new"}`, "Голосова інструкція")}${renderVideoCapture(`homework-video-${selected?.id || "new"}`, "Відеоінструкція")}
         <div class="field"><label>Вкладення <span class="field-optional">(необов’язково)</span></label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn primary" type="submit">Опублікувати</button>
       </form>
     `;
+  }
+
+  function renderHomeworkExercisePicker(templates) {
+    const groups = ownExerciseGroups();
+    const sections = groups.map((group) => ({ name: group.name, templates: templates.filter((template) => template.group_id === group.id) }));
+    const ungrouped = templates.filter((template) => !template.group_id || !groups.some((group) => group.id === template.group_id));
+    if (ungrouped.length) sections.push({ name: "Без групи", templates: ungrouped });
+    return `<div class="filebox exercise-template-picker" data-exercise-template-picker><strong>Вправи з бібліотеки <span class="field-optional">(необов’язково)</span></strong><div class="field"><label class="sr-only" for="exerciseTemplateSearch">Пошук вправ</label><input id="exerciseTemplateSearch" type="search" data-exercise-template-search placeholder="Пошук за групою або назвою вправи" /></div><div class="exercise-template-picker-groups">${sections.map((section) => renderHomeworkExercisePickerGroup(section)).join("")}</div><div class="meta">Розкрий групу, познач потрібні вправи - вони з’являться у цьому домашньому для кожного учня.</div></div>`;
+  }
+
+  function renderHomeworkExercisePickerGroup(section) {
+    const groupSearch = normalizedExerciseSearch(section.name);
+    return `<details class="exercise-template-picker-group" data-exercise-template-group data-group-search="${escapeAttr(groupSearch)}"><summary><strong>${escape(section.name)}</strong><span class="meta">${section.templates.length} ${pluralizeExercises(section.templates.length)}</span></summary><div class="exercise-template-picker-options">${section.templates.map((template) => `<label class="exercise-template-picker-option" data-exercise-template-option data-exercise-search="${escapeAttr(normalizedExerciseSearch(template.title))}"><input type="checkbox" name="exerciseTemplateIds" value="${template.id}" /><span>${escape(template.title)}</span><small>${escape(exerciseKindLabel(template.kind))}</small></label>`).join("") || empty("У цій групі ще немає вправ.")}</div></details>`;
   }
 
   function renderStudentHomeworkFilters() {
@@ -1694,13 +1726,21 @@
     return state.data.exerciseGroups.filter((group) => group.teacher_id === state.session.user.id);
   }
 
-  function exerciseGroupName(groupId) {
-    return state.data.exerciseGroups.find((group) => group.id === groupId)?.name || "";
+  function exerciseTemplateLabel(template) {
+    return template.title;
   }
 
-  function exerciseTemplateLabel(template) {
-    const groupName = exerciseGroupName(template.group_id);
-    return groupName ? `${groupName} · ${template.title}` : template.title;
+  function normalizedExerciseSearch(value) {
+    return String(value || "").trim().toLocaleLowerCase("uk-UA").replace(/\s+/g, " ");
+  }
+
+  function pluralizeExercises(count) {
+    const lastTwo = count % 100;
+    const last = count % 10;
+    if (lastTwo >= 11 && lastTwo <= 14) return "вправ";
+    if (last === 1) return "вправа";
+    if (last >= 2 && last <= 4) return "вправи";
+    return "вправ";
   }
 
   function latestExerciseAttempt(assignmentStudentId) {
