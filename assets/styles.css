@@ -626,11 +626,12 @@ textarea:focus {
 }
 
 .auth-columns {
-  align-items: start;
+  align-items: stretch;
 }
 
 .auth-columns .plain-card {
   padding: 18px;
+  height: 100%;
 }
 
 .auth-columns .stack {
