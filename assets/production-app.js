@@ -16,6 +16,7 @@
     selectedDate: dateInTimezone(new Date(), "Europe/Kyiv"),
     calendarOffset: 0,
     selectedLessonId: null,
+    selectedHomeworkId: null,
     selectedStudentId: null,
     recording: null,
     notice: null,
@@ -83,6 +84,7 @@
     state.canBootstrapSchool = false;
     state.data = emptyData();
     state.selectedLessonId = null;
+    state.selectedHomeworkId = null;
     state.selectedStudentId = null;
 
     if (!state.session) {
@@ -319,17 +321,26 @@
         state.calendarOffset = 0;
         state.selectedDate = isoDate(new Date());
         state.selectedLessonId = null;
+        state.selectedHomeworkId = null;
         renderDashboard();
         return;
       }
       if (action === "select-date") {
         state.selectedDate = target.dataset.date;
         state.selectedLessonId = null;
+        state.selectedHomeworkId = null;
         renderDashboard();
         return;
       }
       if (action === "select-lesson") {
         state.selectedLessonId = target.dataset.lessonId || null;
+        state.selectedHomeworkId = null;
+        renderDashboard();
+        return;
+      }
+      if (action === "select-homework") {
+        const homeworkId = target.dataset.homeworkId || null;
+        state.selectedHomeworkId = state.selectedHomeworkId === homeworkId ? null : homeworkId;
         renderDashboard();
         return;
       }
@@ -578,33 +589,17 @@
 
   async function saveLessonCard(form) {
     const lessonId = value(form, "lessonId");
-    const homeworkTitle = value(form, "homeworkTitle");
-    const homeworkDescription = value(form, "homeworkDescription");
-    const homeworkDeadline = value(form, "homeworkDeadline");
-    const hasHomeworkFiles = hasSelectedFiles(form, '[name="homeworkFiles"], [data-recorded-media][data-capture-target="homework"]');
-    const hasHomeworkDetails = homeworkTitle || homeworkDescription || homeworkDeadline || hasHomeworkFiles;
-    if (hasHomeworkDetails && !homeworkTitle) throw new Error("Щоб опублікувати домашнє, додай його назву.");
+    const status = value(form, "status");
+    if (!status) throw new Error("Обери статус заняття.");
 
     const { error } = await state.client.rpc("set_lesson_status", {
       p_lesson_id: lessonId,
-      p_status: value(form, "status"),
+      p_status: status,
       p_note: value(form, "teacherNote")
     });
     if (error) throw error;
-    if (hasHomeworkDetails) {
-      const { data, error: homeworkError } = await state.client.rpc("create_homework", {
-        p_school_id: state.school.id,
-        p_lesson_id: lessonId,
-        p_title: homeworkTitle,
-        p_description: homeworkDescription,
-        p_deadline_at: homeworkDeadline ? new Date(homeworkDeadline).toISOString() : null,
-        p_student_ids: lessonStudents(lessonId).map((row) => row.student_id)
-      });
-      if (homeworkError) throw homeworkError;
-      await uploadInputFiles(form, { homework_id: data }, '[name="homeworkFiles"], [data-recorded-media][data-capture-target="homework"]');
-    }
     await uploadInputFiles(form, { lesson_id: lessonId }, '[name="lessonFiles"], [data-recorded-media][data-capture-target="lesson"]');
-    state.notice = success(hasHomeworkDetails ? "Картку заняття й домашнє збережено." : "Картку заняття збережено. За потреби фінансовий запис створено автоматично.");
+    state.notice = success("Картку заняття збережено. За потреби фінансовий запис створено автоматично.");
     await refreshContext();
   }
 
@@ -612,10 +607,11 @@
     const lessonId = value(form, "lessonId") || null;
     const selectedLesson = lessonId ? lessonById(lessonId) : null;
     const studentIds = selectedLesson ? lessonStudents(selectedLesson.id).map((row) => row.student_id) : values(form, "studentIds");
+    if (!studentIds.length) throw new Error("Обери заняття або хоча б одного учня для домашнього завдання.");
     const { data, error } = await state.client.rpc("create_homework", {
       p_school_id: state.school.id,
       p_lesson_id: lessonId,
-      p_title: value(form, "title"),
+      p_title: automaticHomeworkTitle(selectedLesson),
       p_description: value(form, "description"),
       p_deadline_at: value(form, "deadline") ? new Date(value(form, "deadline")).toISOString() : null,
       p_student_ids: studentIds
@@ -976,13 +972,23 @@
       <div class="lesson-focus">
         <div class="item"><div class="item-head"><div><p class="item-title">${escape(subjectName(lesson.subject_id))} · ${escape(lesson.title)}</p><div class="meta">${escape(formatDateTime(lesson.starts_at))} — ${escape(formatTime(lesson.ends_at))}</div><div class="meta">${escape(participants.map((row) => nameOf(row.student_id)).join(", "))}</div></div>${statusBadge(lesson.status)}</div>${lesson.meeting_url ? `<a href="${escapeAttr(lesson.meeting_url)}" target="_blank" rel="noopener">Відкрити зустріч</a>` : ""}${renderAttachments({ lesson_id: lesson.id })}</div>
         <form id="lessonCardForm" class="stack" style="margin-top:12px;"><input type="hidden" name="lessonId" value="${lesson.id}" />
-          <div class="field"><label>Статус</label><select name="status">${lessonStatusOptions(lesson.status)}</select></div>
-          <div class="field"><label>Нотатки викладача</label><textarea name="teacherNote" placeholder="Що пройшли, що повторити наступного разу">${escape(lesson.teacher_note || "")}</textarea></div><div class="media-capture-row">${renderVoiceCapture(`lesson-note-${lesson.id}`, "Голосова нотатка", "lesson")}${renderVideoCapture(`lesson-note-video-${lesson.id}`, "Відеонотатка", "lesson")}</div>
-          <div class="filebox stack"><strong>Домашнє до цього уроку <span class="field-optional">(необов’язково)</span></strong><div class="field"><label>Назва</label><input name="homeworkTitle" /></div><div class="field"><label>Опис</label><textarea name="homeworkDescription"></textarea></div><div class="field"><label>Дедлайн</label><input name="homeworkDeadline" type="datetime-local" /></div><div class="media-capture-row">${renderVoiceCapture(`homework-${lesson.id}`, "Голосова інструкція", "homework")}${renderVideoCapture(`homework-video-${lesson.id}`, "Відеоінструкція", "homework")}</div><div class="field"><label>Файли до домашнього</label><input name="homeworkFiles" type="file" multiple accept="${supportedFileAccept()}" /></div></div>
+          <div class="field"><label>Статус</label><select name="status" required>${lessonStatusOptions(lesson.status)}</select></div>
+          <div class="field"><label>Нотатки викладача <span class="field-optional">(необов’язково)</span></label><textarea name="teacherNote" placeholder="Що пройшли, що повторити наступного разу">${escape(lesson.teacher_note || "")}</textarea></div><div class="media-capture-row">${renderVoiceCapture(`lesson-note-${lesson.id}`, "Голосова нотатка", "lesson")}${renderVideoCapture(`lesson-note-video-${lesson.id}`, "Відеонотатка", "lesson")}</div>
           <div class="filebox stack"><strong>Матеріали до уроку <span class="field-optional">(необов’язково)</span></strong><input name="lessonFiles" type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.docx" /></div>
           <button class="btn primary" type="submit">Зберегти картку заняття</button>
         </form>
-        <div style="margin-top:12px;"><strong>Домашні до уроку</strong>${lessonTasks.length ? `<div class="list" style="margin-top:8px;">${lessonTasks.map((task) => `<div class="item"><p class="item-title">${escape(task.title)}</p><div class="meta">${task.deadline_at ? "Дедлайн: " + escape(formatDateTime(task.deadline_at)) : "Без дедлайну"}</div></div>`).join("")}</div>` : '<div class="meta">Ще не опубліковано.</div>'}</div>
+        ${renderLessonHomeworkPreview(lessonTasks)}
+      </div>
+    `;
+  }
+
+  function renderLessonHomeworkPreview(tasks) {
+    if (!tasks.length) return `<div class="lesson-homework"><strong>Домашні до уроку</strong><div class="meta">Ще не опубліковано. Додай завдання у розділі «Домашні».</div></div>`;
+    const selectedTask = tasks.find((task) => task.id === state.selectedHomeworkId) || null;
+    return `
+      <div class="lesson-homework"><strong>Домашні до уроку</strong>
+        <div class="list">${tasks.map((task) => `<button class="lesson-card linked-homework-card ${selectedTask?.id === task.id ? "active" : ""}" type="button" data-action="select-homework" data-homework-id="${task.id}" aria-expanded="${selectedTask?.id === task.id}"><div class="lesson-card-head"><strong>Домашнє завдання</strong><span class="meta">${escape(formatDateTime(task.created_at))}</span></div><div class="meta">${task.deadline_at ? "Дедлайн: " + escape(formatDateTime(task.deadline_at)) : "Без дедлайну"}</div></button>`).join("")}</div>
+        ${selectedTask ? `<div class="filebox homework-preview"><div class="item-head"><strong>Домашнє завдання</strong><span class="meta">Опубліковано</span></div><div class="homework-text"><strong>Текст</strong><p>${escape(selectedTask.description || "Текст не додано.")}</p></div>${selectedTask.deadline_at ? `<div class="meta">Дедлайн: ${escape(formatDateTime(selectedTask.deadline_at))}</div>` : ""}${renderAttachments({ homework_id: selectedTask.id })}</div>` : ""}
       </div>
     `;
   }
@@ -991,11 +997,11 @@
     const students = teacherStudents();
     return `
       <form id="createHomeworkForm" class="stack">
-        <div class="field"><label>Пов’язати із заняттям</label><select name="lessonId"><option value="">Без прив’язки</option>${state.data.lessons.filter((lesson) => lesson.teacher_id === state.session.user.id).map((lesson) => `<option value="${lesson.id}" ${selected?.id === lesson.id ? "selected" : ""}>${escape(homeworkLessonLabel(lesson))}</option>`).join("")}</select></div>
-        <div class="field"><label>Назва</label><input name="title" required /></div><div class="field"><label>Опис</label><textarea name="description"></textarea></div><div class="field"><label>Дедлайн</label><input name="deadline" type="datetime-local" /></div>
-        ${selected ? "" : selectField("studentIds", "Учні", students.map((student) => ({ user_id: student.id })), true, null, true)}
+        <div class="field"><label>Пов’язати із заняттям <span class="field-optional">(необов’язково)</span></label><select name="lessonId"><option value="">Без прив’язки</option>${state.data.lessons.filter((lesson) => lesson.teacher_id === state.session.user.id).map((lesson) => `<option value="${lesson.id}" ${selected?.id === lesson.id ? "selected" : ""}>${escape(homeworkLessonLabel(lesson))}</option>`).join("")}</select></div>
+        <div class="field"><label>Текст <span class="field-optional">(необов’язково)</span></label><textarea name="description" placeholder="Напиши інструкцію або залиш поле порожнім, якщо додаси файл чи запис."></textarea></div><div class="field"><label>Дедлайн <span class="field-optional">(необов’язково)</span></label><input name="deadline" type="datetime-local" /></div>
+        ${selectField("studentIds", "Учні (лише якщо без заняття)", students.map((student) => ({ user_id: student.id })), false, null, true)}
         ${renderVoiceCapture(`homework-${selected?.id || "new"}`, "Голосова інструкція")}${renderVideoCapture(`homework-video-${selected?.id || "new"}`, "Відеоінструкція")}
-        <div class="field"><label>Вкладення</label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn primary" type="submit">Опублікувати</button>
+        <div class="field"><label>Вкладення <span class="field-optional">(необов’язково)</span></label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn primary" type="submit">Опублікувати</button>
       </form>
     `;
   }
@@ -1004,7 +1010,7 @@
     const rows = tasks.flatMap((task) => homeworkStudents(task.id).map((recipient) => ({ task, recipient }))).filter((row) => row.recipient.status !== "not_started");
     return `<div class="list">${rows.length ? rows.map(({ task, recipient }) => {
       const submissions = submissionsFor(recipient.id);
-      return `<div class="item"><p class="item-title">${escape(homeworkReviewLabel(task, recipient))}</p><div class="meta">Завдання: ${escape(task.title)} · статус: ${submissionLabel(recipient.status)}${recipient.grade ? " · оцінка: " + escape(recipient.grade) : ""}</div>${submissions.map((submission) => `<div class="filebox"><div>${escape(submission.body || "Файли без тексту")}</div>${renderAttachments({ submission_id: submission.id })}</div>`).join("")}${recipient.teacher_comment ? `<div class="meta">Мій коментар: ${escape(recipient.teacher_comment)}</div>` : ""}<form id="feedbackForm" class="stack" style="margin-top:8px;"><input type="hidden" name="homeworkStudentId" value="${recipient.id}" /><div class="two-fields"><div class="field"><label>Статус</label><select name="status"><option value="reviewed">Перевірено</option><option value="needs_revision">На доопрацювання</option></select></div><div class="field"><label>Оцінка</label><input name="grade" placeholder="Наприклад, 11/12" value="${escapeAttr(recipient.grade || "")}" /></div></div><div class="field"><label>Коментар</label><textarea name="comment">${escape(recipient.teacher_comment || "")}</textarea></div>${renderVoiceCapture(`feedback-${recipient.id}`, "Голосовий коментар")}${renderVideoCapture(`feedback-video-${recipient.id}`, "Відеокоментар")}<div class="field"><label>Виправлений файл</label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn small secondary" type="submit">Надіслати зворотний зв’язок</button></form></div>`;
+      return `<div class="item"><p class="item-title">${escape(homeworkReviewLabel(task, recipient))}</p><div class="meta">Статус: ${submissionLabel(recipient.status)}${recipient.grade ? " · оцінка: " + escape(recipient.grade) : ""}</div>${submissions.map((submission) => `<div class="filebox"><div>${escape(submission.body || "Файли без тексту")}</div>${renderAttachments({ submission_id: submission.id })}</div>`).join("")}${recipient.teacher_comment ? `<div class="meta">Мій коментар: ${escape(recipient.teacher_comment)}</div>` : ""}<form id="feedbackForm" class="stack" style="margin-top:8px;"><input type="hidden" name="homeworkStudentId" value="${recipient.id}" /><div class="two-fields"><div class="field"><label>Статус</label><select name="status" required><option value="reviewed">Перевірено</option><option value="needs_revision">На доопрацювання</option></select></div><div class="field"><label>Оцінка <span class="field-optional">(необов’язково)</span></label><input name="grade" placeholder="Наприклад, 11/12" value="${escapeAttr(recipient.grade || "")}" /></div></div><div class="field"><label>Коментар <span class="field-optional">(необов’язково)</span></label><textarea name="comment">${escape(recipient.teacher_comment || "")}</textarea></div>${renderVoiceCapture(`feedback-${recipient.id}`, "Голосовий коментар")}${renderVideoCapture(`feedback-video-${recipient.id}`, "Відеокоментар")}<div class="field"><label>Виправлений файл <span class="field-optional">(необов’язково)</span></label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn small secondary" type="submit">Надіслати зворотний зв’язок</button></form></div>`;
     }).join("") : empty("Надісланих робіт ще немає.")}</div>`;
   }
 
@@ -1013,7 +1019,7 @@
     if (!task) return "";
     const submissions = submissionsFor(recipient.id);
     return `
-      <article class="card homework-card"><div class="item-head"><div><p class="eyebrow">${task.deadline_at ? "Дедлайн: " + escape(formatDateTime(task.deadline_at)) : "Без дедлайну"}</p><h2>${escape(task.title)}</h2></div>${submissionBadge(recipient.status)}</div><p>${escape(task.description || "Без опису")}</p>${renderAttachments({ homework_id: task.id })}${recipient.teacher_comment ? `<div class="feedback-box"><strong>Коментар викладача</strong><div>${escape(recipient.teacher_comment)}</div>${recipient.grade ? `<div>Оцінка: ${escape(recipient.grade)}</div>` : ""}${renderAttachments({ homework_student_id: recipient.id })}</div>` : ""}${submissions.length ? `<div class="filebox"><strong>Мої відповіді</strong>${submissions.map((submission) => `<div class="meta">${escape(formatDateTime(submission.submitted_at))}: ${escape(submission.body || "Файли")}${renderAttachments({ submission_id: submission.id })}</div>`).join("")}</div>` : ""}<form id="submitHomeworkForm" class="stack" style="margin-top:12px;"><input type="hidden" name="homeworkStudentId" value="${recipient.id}" /><div class="field"><label>Моя відповідь</label><textarea name="body" placeholder="Опиши розв’язання або додай посилання"></textarea></div>${renderVoiceCapture(`submission-${recipient.id}`, "Голосова відповідь")}${renderVideoCapture(`submission-video-${recipient.id}`, "Відеовідповідь")}<div class="field"><label>Файли відповіді</label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn primary" type="submit">Надіслати відповідь</button></form></article>
+      <article class="card homework-card"><div class="item-head"><div><p class="eyebrow">${task.deadline_at ? "Дедлайн: " + escape(formatDateTime(task.deadline_at)) : "Без дедлайну"}</p><h2>Домашнє завдання</h2></div>${submissionBadge(recipient.status)}</div><div class="homework-text"><strong>Текст</strong><p>${escape(task.description || "Текст не додано.")}</p></div>${renderAttachments({ homework_id: task.id })}${recipient.teacher_comment ? `<div class="feedback-box"><strong>Коментар викладача</strong><div>${escape(recipient.teacher_comment)}</div>${recipient.grade ? `<div>Оцінка: ${escape(recipient.grade)}</div>` : ""}${renderAttachments({ homework_student_id: recipient.id })}</div>` : ""}${submissions.length ? `<div class="filebox"><strong>Мої відповіді</strong>${submissions.map((submission) => `<div class="meta">${escape(formatDateTime(submission.submitted_at))}: ${escape(submission.body || "Файли")}${renderAttachments({ submission_id: submission.id })}</div>`).join("")}</div>` : ""}<form id="submitHomeworkForm" class="stack" style="margin-top:12px;"><input type="hidden" name="homeworkStudentId" value="${recipient.id}" /><div class="field"><label>Моя відповідь <span class="field-optional">(необов’язково)</span></label><textarea name="body" placeholder="Опиши розв’язання або додай посилання"></textarea></div>${renderVoiceCapture(`submission-${recipient.id}`, "Голосова відповідь")}${renderVideoCapture(`submission-video-${recipient.id}`, "Відеовідповідь")}<div class="field"><label>Файли відповіді <span class="field-optional">(необов’язково)</span></label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn primary" type="submit">Надіслати відповідь</button></form></article>
     `;
   }
 
@@ -1031,7 +1037,7 @@
   }
 
   function renderStudentTaskFeed(tasks) {
-    return `<div class="list">${tasks.length ? tasks.map((item) => { const task = homeworkById(item.homework_id); return `<div class="item"><div class="item-head"><div><p class="item-title">${escape(task?.title || "Домашнє")}</p><div class="meta">${task?.deadline_at ? "Дедлайн: " + escape(formatDateTime(task.deadline_at)) : "Без дедлайну"}</div></div>${submissionBadge(item.status)}</div></div>`; }).join("") : empty("Усе виконано.")}</div>`;
+    return `<div class="list">${tasks.length ? tasks.map((item) => { const task = homeworkById(item.homework_id); return `<div class="item"><div class="item-head"><div><p class="item-title">Домашнє завдання</p><div class="meta">${task?.deadline_at ? "Дедлайн: " + escape(formatDateTime(task.deadline_at)) : "Без дедлайну"}</div></div>${submissionBadge(item.status)}</div></div>`; }).join("") : empty("Усе виконано.")}</div>`;
   }
 
   function renderCalendar(lessons) {
@@ -1394,6 +1400,10 @@
   function homeworkLessonLabel(lesson) {
     const studentNames = lessonStudents(lesson.id).map((item) => nameOf(item.student_id)).join(", ") || "Без учня";
     return `${formatDateTime(lesson.starts_at)} - ${subjectName(lesson.subject_id)} - ${studentNames}`;
+  }
+
+  function automaticHomeworkTitle(lesson) {
+    return lesson ? `Домашнє до ${subjectName(lesson.subject_id)}` : "Домашнє завдання";
   }
 
   function homeworkReviewLabel(task, recipient) {

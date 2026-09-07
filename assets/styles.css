@@ -1044,6 +1044,27 @@ textarea:focus {
   gap: 4px;
 }
 
+.lesson-homework {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.linked-homework-card {
+  display: grid;
+  gap: 3px;
+}
+
+.homework-preview {
+  display: grid;
+  gap: 9px;
+}
+
+.homework-text p {
+  margin: 5px 0 0;
+  white-space: pre-wrap;
+}
+
 .two-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
