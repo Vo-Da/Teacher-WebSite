@@ -161,6 +161,7 @@ declare
   v_right_options jsonb;
   v_item jsonb;
   v_answer_item jsonb;
+  v_correct_option_ids jsonb;
   v_item_id text;
   v_group public.exercise_groups;
 begin
@@ -232,17 +233,25 @@ begin
 
       if p_kind = 'multiple_choice' then
         if jsonb_typeof(v_item -> 'options') <> 'array' then
-          raise exception 'Multiple choice item needs options and a correct answer';
+          raise exception 'Multiple choice item needs options and at least one correct answer';
         end if;
+        v_correct_option_ids := case
+          when jsonb_typeof(v_answer_item -> 'correctOptionIds') = 'array' then v_answer_item -> 'correctOptionIds'
+          else jsonb_build_array(coalesce(v_answer_item ->> 'correctOptionId', ''))
+        end;
         if jsonb_array_length(v_item -> 'options') < 2
-          or coalesce(v_answer_item ->> 'correctOptionId', '') = ''
-          or not exists (
-            select 1
-            from jsonb_array_elements(v_item -> 'options') as option_item(value)
-            where option_item.value ->> 'id' = v_answer_item ->> 'correctOptionId'
-              and trim(coalesce(option_item.value ->> 'text', '')) <> ''
+          or jsonb_array_length(v_correct_option_ids) = 0
+          or jsonb_array_length(v_correct_option_ids) > jsonb_array_length(v_item -> 'options')
+          or (select count(distinct correct_option.value) from jsonb_array_elements_text(v_correct_option_ids) correct_option(value)) <> jsonb_array_length(v_correct_option_ids)
+          or exists (
+            select 1 from jsonb_array_elements_text(v_correct_option_ids) correct_option(value)
+            where not exists (
+              select 1 from jsonb_array_elements(v_item -> 'options') option_item(value)
+              where option_item.value ->> 'id' = correct_option.value
+                and trim(coalesce(option_item.value ->> 'text', '')) <> ''
+            )
           ) then
-          raise exception 'Multiple choice item needs options and a correct answer';
+          raise exception 'Multiple choice item needs options and at least one correct answer';
         end if;
       elsif p_kind = 'multiple_select' then
         if jsonb_typeof(v_item -> 'options') <> 'array'
@@ -387,6 +396,7 @@ declare
   v_item_id text;
   v_submitted_answer text;
   v_submitted_json jsonb;
+  v_correct_option_ids jsonb;
   v_normalized_answer text;
   v_correct boolean;
   v_score integer;
@@ -425,7 +435,14 @@ begin
 
       v_correct := false;
       if v_kind = 'multiple_choice' then
-        v_correct := v_submitted_answer <> '' and v_submitted_answer = coalesce(v_answer_item ->> 'correctOptionId', '');
+        v_correct_option_ids := case
+          when jsonb_typeof(v_answer_item -> 'correctOptionIds') = 'array' then v_answer_item -> 'correctOptionIds'
+          else jsonb_build_array(coalesce(v_answer_item ->> 'correctOptionId', ''))
+        end;
+        select v_submitted_answer <> '' and exists (
+          select 1 from jsonb_array_elements_text(v_correct_option_ids) correct_option(value)
+          where correct_option.value = v_submitted_answer
+        ) into v_correct;
       elsif v_kind = 'multiple_select' then
         begin
           v_submitted_json := coalesce((p_answers ->> v_item_id)::jsonb, '[]'::jsonb);

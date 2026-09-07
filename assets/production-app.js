@@ -1121,7 +1121,7 @@
         <div class="field"><label>Назва вправи</label><input name="title" maxlength="200" placeholder="Наприклад, Present Simple: повторення" /></div>
         <div class="field"><label>Текст / інструкція <span class="field-optional">(необов’язково)</span></label><textarea name="prompt" maxlength="10000" placeholder="Напиши запитання, речення з пропуском або коротку інструкцію."></textarea></div>
         <div class="exercise-import-fields" data-exercise-import-fields><div class="field"><label>Рядки вправи</label><textarea name="importRows" data-exercise-import-input rows="10" placeholder="She ___ to school. / go;goes;going;gone / goes"></textarea></div><button class="btn small secondary" type="button" data-action="preview-exercise-import">Перевірити рядки</button><div class="exercise-import-preview" data-exercise-import-preview></div></div>
-        <div class="exercise-kind-fields is-visible" data-exercise-kind-fields="multiple_choice"><div class="filebox"><strong>Формат для вибору варіанту</strong><br><code>Речення / варіант 1;варіант 2;... / правильний варіант</code><br><span class="meta">Кожен рядок - окреме завдання. Максимум 30 рядків.</span></div></div>
+        <div class="exercise-kind-fields is-visible" data-exercise-kind-fields="multiple_choice"><div class="filebox"><strong>Формат для вибору варіанту</strong><br><code>Речення / варіант 1;варіант 2;... / правильний варіант;ще один прийнятний</code><br><span class="meta">Учень обирає один варіант. У третій колонці через <code>;</code> можна вказати кілька прийнятних відповідей. Максимум 30 рядків.</span></div></div>
         <div class="exercise-kind-fields" data-exercise-kind-fields="multiple_select"><div class="filebox"><strong>Формат для кількох правильних варіантів</strong><br><code>Which are colours? / red;book;blue;green / red;blue;green</code><br><span class="meta">Правильні варіанти в останній колонці розділяй символом <code>;</code>. Учень повинен обрати всі правильні відповіді. Максимум 30 завдань.</span></div></div>
         <div class="exercise-kind-fields" data-exercise-kind-fields="fill_blank"><div class="filebox"><strong>Формат для пропуску</strong><br><code>Речення /  / правильна відповідь;допустима відповідь</code><br><span class="meta">Середня колонка лишається порожньою. Максимум 30 рядків.</span></div></div>
         <div class="exercise-kind-fields" data-exercise-kind-fields="word_order"><div class="filebox"><strong>Формат для порядку слів</strong><br><code>She / goes / to / school / every / day.</code><br><span class="meta">Один рядок - одне речення. Слова мають бути в правильному порядку; учень отримає їх перемішаними. Максимум 30 речень.</span></div></div>
@@ -1980,7 +1980,6 @@
       if (kind === "multiple_choice" || kind === "multiple_select") {
         const optionTexts = optionsValue.split(";").map((option) => option.trim()).filter(Boolean);
         if (optionTexts.length < 2) throw new Error(`Рядок ${rowNumber}: для вибору варіанту потрібно щонайменше дві відповіді.`);
-        if (kind === "multiple_choice" && acceptedAnswers.length !== 1) throw new Error(`Рядок ${rowNumber}: для вибору варіанту вкажи одну правильну відповідь.`);
         const options = optionTexts.map((text, optionIndex) => ({ id: `${itemId}-o${optionIndex + 1}`, text }));
         const correctOptionIds = acceptedAnswers.map((acceptedAnswer) => {
           const option = options.find((candidate) => normalizedExerciseAnswer(candidate.text) === normalizedExerciseAnswer(acceptedAnswer));
@@ -2032,7 +2031,7 @@
     if (kind === "multiple_choice") {
       return {
         content: { items: rows.map(({ id, prompt, options }) => ({ id, prompt, options })) },
-        answerData: { items: rows.map(({ id, acceptedAnswers }) => ({ id, correctOptionId: acceptedAnswers[0] })) }
+        answerData: { items: rows.map(({ id, acceptedAnswers }) => ({ id, correctOptionIds: acceptedAnswers })) }
       };
     }
     if (kind === "multiple_select") {
@@ -2149,7 +2148,7 @@
     form.querySelector("[data-exercise-import-fields]")?.classList.toggle("is-hidden", kind === "wordwall");
     const importInput = form.querySelector("[data-exercise-import-input]");
     if (importInput) importInput.placeholder = {
-      multiple_choice: "She ___ to school. / go;goes;going;gone / goes",
+      multiple_choice: "She ___ to school. / go;goes;going;gone / goes;going",
       multiple_select: "Which are colours? / red;book;blue;green / red;blue;green",
       fill_blank: "She ___ to school. /  / goes",
       word_order: "She / goes / to / school / every / day.",
