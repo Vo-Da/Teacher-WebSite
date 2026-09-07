@@ -17,6 +17,7 @@
     calendarOffset: 0,
     selectedLessonId: null,
     selectedHomeworkId: null,
+    selectedExerciseAssignmentId: null,
     selectedStudentId: null,
     recording: null,
     notice: null,
@@ -42,6 +43,10 @@
       homework: [],
       homeworkStudents: [],
       submissions: [],
+      exerciseTemplates: [],
+      exerciseAssignments: [],
+      exerciseAssignmentStudents: [],
+      exerciseAttempts: [],
       attachments: [],
       studentInternalProfiles: [],
       studentInternalNotes: [],
@@ -85,6 +90,7 @@
     state.data = emptyData();
     state.selectedLessonId = null;
     state.selectedHomeworkId = null;
+    state.selectedExerciseAssignmentId = null;
     state.selectedStudentId = null;
 
     if (!state.session) {
@@ -151,7 +157,7 @@
     const schoolId = state.membership.school_id;
     const canAdminister = hasRole("admin");
     const canManageStudentContext = state.activeRole === "admin" || state.activeRole === "teacher";
-    const [subjects, relations, lessons, homework, profiles, memberships, studentInternalProfiles, studentInternalNotes] = await Promise.all([
+    const [subjects, relations, lessons, homework, profiles, memberships, studentInternalProfiles, studentInternalNotes, exerciseTemplates, exerciseAssignments] = await Promise.all([
       selectRows("subjects", (q) => q.eq("school_id", schoolId).order("name")),
       selectRows("teacher_students", (q) => q.eq("school_id", schoolId).eq("is_active", true)),
       selectRows("lessons", (q) => q.eq("school_id", schoolId).order("starts_at")),
@@ -159,7 +165,9 @@
       selectRows("profiles", (q) => q.order("full_name")),
       canAdminister ? selectRows("school_memberships", (q) => q.eq("school_id", schoolId)) : Promise.resolve([]),
       canManageStudentContext ? selectRows("student_internal_profiles", (q) => q.eq("school_id", schoolId)) : Promise.resolve([]),
-      canManageStudentContext ? selectRows("student_internal_notes", (q) => q.eq("school_id", schoolId).order("created_at", { ascending: false })) : Promise.resolve([])
+      canManageStudentContext ? selectRows("student_internal_notes", (q) => q.eq("school_id", schoolId).order("created_at", { ascending: false })) : Promise.resolve([]),
+      selectRows("exercise_templates", (q) => q.eq("school_id", schoolId).order("created_at", { ascending: false })),
+      selectRows("exercise_assignments", (q) => q.eq("school_id", schoolId).order("created_at", { ascending: false }))
     ]);
 
     state.data.subjects = subjects;
@@ -170,12 +178,16 @@
     state.data.memberships = memberships;
     state.data.studentInternalProfiles = studentInternalProfiles;
     state.data.studentInternalNotes = studentInternalNotes;
+    state.data.exerciseTemplates = exerciseTemplates;
+    state.data.exerciseAssignments = exerciseAssignments;
 
     const lessonIds = lessons.map((item) => item.id);
     const homeworkIds = homework.map((item) => item.id);
     state.data.lessonStudents = await selectRowsIn("lesson_students", "lesson_id", lessonIds);
     state.data.homeworkStudents = await selectRowsIn("homework_students", "homework_id", homeworkIds);
     state.data.submissions = await selectRowsIn("homework_submissions", "homework_student_id", state.data.homeworkStudents.map((item) => item.id));
+    state.data.exerciseAssignmentStudents = await selectRowsIn("exercise_assignment_students", "assignment_id", exerciseAssignments.map((item) => item.id));
+    state.data.exerciseAttempts = await selectRowsIn("exercise_attempts", "assignment_student_id", state.data.exerciseAssignmentStudents.map((item) => item.id));
     state.data.attachments = await selectRows("file_attachments", (q) => q.eq("school_id", schoolId).order("created_at", { ascending: false }));
 
     if (canAdminister) {
@@ -344,6 +356,12 @@
         renderDashboard();
         return;
       }
+      if (action === "select-exercise-assignment") {
+        const assignmentId = target.dataset.assignmentId || null;
+        state.selectedExerciseAssignmentId = state.selectedExerciseAssignmentId === assignmentId ? null : assignmentId;
+        renderDashboard();
+        return;
+      }
       if (action === "open-student-card") {
         state.selectedStudentId = target.dataset.studentId || null;
         renderDashboard();
@@ -404,6 +422,10 @@
         await updateHomeworkStudent(target.dataset.homeworkStudentId, { status: "reviewed", reviewed_at: new Date().toISOString() });
         return;
       }
+      if (action === "review-wordwall-exercise") {
+        await reviewWordwallExercise(target.dataset.assignmentStudentId);
+        return;
+      }
       if (action === "delete-lesson") {
         if (!confirm("Видалити це заняття?")) return;
         const { error } = await state.client.from("lessons").delete().eq("id", target.dataset.lessonId);
@@ -422,6 +444,10 @@
     if (input.matches?.("[data-student-stat-range]")) {
       const statistics = input.closest(".student-statistics");
       refreshStudentStatistics(statistics);
+      return;
+    }
+    if (input.name === "exerciseKind" && input.form?.id === "createExerciseTemplateForm") {
+      toggleExerciseTemplateFields(input.form);
       return;
     }
     if (input.name !== "startsAt" || input.form?.id !== "createLessonForm" || !input.value) return;
@@ -450,6 +476,9 @@
       if (form.id === "recordPaymentForm") await recordPayment(form);
       if (form.id === "submitHomeworkForm") await submitHomework(form);
       if (form.id === "feedbackForm") await sendFeedback(form);
+      if (form.id === "createExerciseTemplateForm") await createExerciseTemplate(form);
+      if (form.id === "assignExerciseForm") await assignExercise(form);
+      if (form.id === "submitExerciseForm") await submitExercise(form);
       if (form.id === "studentInternalCardForm") await saveStudentInternalCard(form);
       if (form.id === "adminCreateUserForm") await createAdminUser(form);
       if (form.id === "changeUserRolesForm") await changeUserRoles(form);
@@ -667,6 +696,86 @@
     await refreshContext();
   }
 
+  async function createExerciseTemplate(form) {
+    const kind = value(form, "exerciseKind");
+    const title = value(form, "title");
+    const prompt = value(form, "prompt");
+    if (title.length < 2) throw new Error("Додай коротку назву вправи для бібліотеки.");
+
+    let content = {};
+    let answerData = {};
+    if (kind === "multiple_choice") {
+      const options = ["a", "b", "c", "d"]
+        .map((id) => ({ id, text: value(form, `option-${id}`) }))
+        .filter((option) => option.text);
+      const correctOptionId = value(form, "correctOptionId");
+      if (options.length < 2 || !options.some((option) => option.id === correctOptionId)) {
+        throw new Error("Додай щонайменше два варіанти та познач правильний.");
+      }
+      content = { options };
+      answerData = { correctOptionId };
+    } else if (kind === "fill_blank") {
+      const acceptedAnswers = value(form, "acceptedAnswers").split(",").map((answer) => answer.trim()).filter(Boolean);
+      if (!acceptedAnswers.length) throw new Error("Додай хоча б один правильний варіант відповіді.");
+      content = {};
+      answerData = { acceptedAnswers };
+    } else if (kind === "wordwall") {
+      content = { url: wordwallUrl(value(form, "wordwallUrl")) };
+    } else {
+      throw new Error("Обери тип вправи.");
+    }
+
+    const { error } = await state.client.rpc("create_exercise_template", {
+      p_school_id: state.school.id,
+      p_kind: kind,
+      p_title: title,
+      p_prompt: prompt,
+      p_content: content,
+      p_answer_data: answerData
+    });
+    if (error) throw error;
+    state.notice = success("Вправу додано до бібліотеки.");
+    await refreshContext();
+  }
+
+  async function assignExercise(form) {
+    const studentIds = values(form, "studentIds");
+    if (!studentIds.length) throw new Error("Обери хоча б одного учня для вправи.");
+    const { error } = await state.client.rpc("create_exercise_assignment", {
+      p_school_id: state.school.id,
+      p_template_id: value(form, "templateId"),
+      p_student_ids: studentIds,
+      p_deadline_at: value(form, "deadline") ? new Date(value(form, "deadline")).toISOString() : null
+    });
+    if (error) throw error;
+    state.notice = success("Вправу призначено учням.");
+    await refreshContext();
+  }
+
+  async function submitExercise(form) {
+    const kind = value(form, "kind");
+    const answer = value(form, "answer");
+    if (kind !== "wordwall" && !answer) throw new Error("Дай відповідь перед перевіркою.");
+    const { data, error } = await state.client.rpc("submit_exercise_attempt", {
+      p_assignment_student_id: value(form, "assignmentStudentId"),
+      p_answers: kind === "wordwall" ? {} : { answer }
+    });
+    if (error) throw error;
+    state.notice = kind === "wordwall"
+      ? success("Позначку про виконання надіслано викладачу.")
+      : success(`Перевірено: ${data?.score || 0}/${data?.total || 1}. Можна спробувати ще раз.`);
+    await refreshContext();
+  }
+
+  async function reviewWordwallExercise(assignmentStudentId) {
+    const { error } = await state.client.rpc("review_wordwall_exercise", {
+      p_assignment_student_id: assignmentStudentId
+    });
+    if (error) throw error;
+    state.notice = success("Виконання Wordwall підтверджено.");
+    await refreshContext();
+  }
+
   async function saveStudentInternalCard(form) {
     const studentId = value(form, "studentId");
     if (!studentId) throw new Error("Обери учня для картки учня.");
@@ -767,8 +876,8 @@
     return role === "admin"
       ? [["overview", "Огляд"], ["people", "Люди"], ["subjects", "Предмети і тарифи"], ["payments", "Оплати"], ["finance", "Фінанси"]]
       : role === "teacher"
-        ? [["calendar", "Календар"], ["students", "Мої учні"], ["homework", "Домашні"]]
-        : [["today", "Сьогодні"], ["calendar", "Календар"], ["homework", "Домашні"]];
+        ? [["calendar", "Календар"], ["students", "Мої учні"], ["homework", "Домашні"], ["exercises", "Вправи"]]
+        : [["today", "Сьогодні"], ["calendar", "Календар"], ["homework", "Домашні"], ["exercises", "Вправи"]];
   }
 
   function renderAdminView() {
@@ -871,6 +980,7 @@
   function renderTeacherView() {
     if (state.activeView === "students") return renderTeacherStudents();
     if (state.activeView === "homework") return renderTeacherHomework();
+    if (state.activeView === "exercises") return renderTeacherExercises();
     return renderTeacherCalendar();
   }
 
@@ -912,9 +1022,63 @@
     `;
   }
 
+  function renderTeacherExercises() {
+    const templates = state.data.exerciseTemplates.filter((template) => template.teacher_id === state.session.user.id && template.is_active);
+    const recipients = teacherExerciseRecipients();
+    return `
+      <div class="page-heading"><div><p class="eyebrow">Практика</p><h1>Вправи</h1><p class="muted">Створи вправу один раз, признач учням і переглядай результат кожної спроби.</p></div></div>
+      <div class="work-grid"><div class="card"><h2>Нова вправа</h2>${renderExerciseTemplateForm()}</div><div class="card"><h2>Призначити учням</h2>${renderExerciseAssignmentForm(templates)}</div></div>
+      <div class="card"><h2>Бібліотека вправ</h2>${renderExerciseLibrary(templates)}</div>
+      <div class="card"><h2>Прогрес учнів</h2>${renderTeacherExerciseProgress(recipients)}</div>
+    `;
+  }
+
+  function renderExerciseTemplateForm() {
+    return `
+      <form id="createExerciseTemplateForm" class="stack">
+        <div class="field"><label>Тип вправи</label><select name="exerciseKind"><option value="multiple_choice">Вибрати правильний варіант</option><option value="fill_blank">Вставити пропущене слово</option><option value="wordwall">Wordwall</option></select></div>
+        <div class="field"><label>Назва вправи</label><input name="title" placeholder="Наприклад, Present Simple: повторення" /></div>
+        <div class="field"><label>Текст / інструкція <span class="field-optional">(необов’язково)</span></label><textarea name="prompt" placeholder="Напиши запитання, речення з пропуском або коротку інструкцію."></textarea></div>
+        <div class="exercise-kind-fields is-visible" data-exercise-kind-fields="multiple_choice"><div class="field"><label>Варіант 1</label><input name="option-a" /></div><div class="field"><label>Варіант 2</label><input name="option-b" /></div><div class="field"><label>Варіант 3 <span class="field-optional">(необов’язково)</span></label><input name="option-c" /></div><div class="field"><label>Варіант 4 <span class="field-optional">(необов’язково)</span></label><input name="option-d" /></div><div class="field"><label>Правильний варіант</label><select name="correctOptionId"><option value="">Обери варіант</option><option value="a">Варіант 1</option><option value="b">Варіант 2</option><option value="c">Варіант 3</option><option value="d">Варіант 4</option></select></div></div>
+        <div class="exercise-kind-fields" data-exercise-kind-fields="fill_blank"><div class="field"><label>Правильні відповіді</label><input name="acceptedAnswers" placeholder="Наприклад: goes, go" /><div class="meta">Якщо допустимі кілька відповідей, розділи їх комою.</div></div></div>
+        <div class="exercise-kind-fields" data-exercise-kind-fields="wordwall"><div class="field"><label>Посилання на Wordwall</label><input name="wordwallUrl" type="url" placeholder="https://wordwall.net/..." /><div class="meta">Учень відкриє вправу в Wordwall, а результат перевіриш у своєму кабінеті Wordwall.</div></div></div>
+        <button class="btn primary" type="submit">Додати до бібліотеки</button>
+      </form>
+    `;
+  }
+
+  function renderExerciseAssignmentForm(templates) {
+    const students = teacherStudents();
+    if (!templates.length) return empty("Спершу створи хоча б одну вправу в бібліотеці.");
+    if (!students.length) return empty("Адміністратор ще не призначив тобі учнів.");
+    return `
+      <form id="assignExerciseForm" class="stack">
+        <div class="field"><label>Вправа</label><select name="templateId" required>${templates.map((template) => `<option value="${template.id}">${escape(template.title)} · ${escape(exerciseKindLabel(template.kind))}</option>`).join("")}</select></div>
+        ${selectField("studentIds", "Учні", students.map((student) => ({ user_id: student.id })), true, null, true)}
+        <div class="field"><label>Дедлайн <span class="field-optional">(необов’язково)</span></label><input name="deadline" type="datetime-local" /></div>
+        <button class="btn primary" type="submit">Призначити вправу</button>
+      </form>
+    `;
+  }
+
+  function renderExerciseLibrary(templates) {
+    return `<div class="list">${templates.length ? templates.map((template) => `<div class="item"><div><p class="item-title">${escape(template.title)}</p><div class="meta">${escape(exerciseKindLabel(template.kind))} · створено ${escape(formatDateTime(template.created_at))}</div>${template.prompt ? `<div class="exercise-prompt">${escape(template.prompt)}</div>` : ""}${template.kind === "wordwall" && safeWordwallUrl(template.content?.url) ? `<a class="exercise-link" href="${escapeAttr(safeWordwallUrl(template.content?.url))}" target="_blank" rel="noopener">Відкрити Wordwall</a>` : ""}</div><span class="exercise-kind-badge">${escape(exerciseKindLabel(template.kind))}</span></div>`).join("") : empty("Бібліотека ще порожня.")}</div>`;
+  }
+
+  function renderTeacherExerciseProgress(recipients) {
+    return `<div class="list">${recipients.length ? recipients.map((recipient) => {
+      const assignment = exerciseAssignmentById(recipient.assignment_id);
+      const template = assignment ? exerciseTemplateById(assignment.template_id) : null;
+      if (!assignment || !template) return "";
+      const score = recipient.best_score === null || recipient.best_score === undefined ? "Без автоматичної оцінки" : `${recipient.best_score}/${recipient.total_score || 1}`;
+      return `<div class="item"><div><p class="item-title">${escape(template.title)} · ${escape(nameOf(recipient.student_id))}</p><div class="meta">${escape(exerciseKindLabel(template.kind))} · ${assignment.deadline_at ? "дедлайн: " + escape(formatDateTime(assignment.deadline_at)) : "без дедлайну"}</div><div class="meta">Спроб: ${recipient.attempts_count} · ${score}</div></div><div class="item-actions">${exerciseStatusBadge(recipient.status)}${template.kind === "wordwall" && recipient.status === "submitted" ? `<button class="btn small secondary" type="button" data-action="review-wordwall-exercise" data-assignment-student-id="${recipient.id}">Підтвердити</button>` : ""}</div></div>`;
+    }).join("") : empty("Ще немає призначених вправ.")}</div>`;
+  }
+
   function renderStudentView() {
     if (state.activeView === "calendar") return renderStudentCalendar();
     if (state.activeView === "homework") return renderStudentHomework();
+    if (state.activeView === "exercises") return renderStudentExercises();
     return renderStudentToday();
   }
 
@@ -947,6 +1111,41 @@
       <div class="page-heading"><div><p class="eyebrow">Домашні завдання</p><h1>Мої роботи</h1><p class="muted">Надсилай текст або файл і повертайся до коментаря викладача.</p></div></div>
       <div class="list">${tasks.map((item) => renderStudentHomeworkCard(item)).join("") || empty("Домашніх завдань поки немає.")}</div>
     `;
+  }
+
+  function renderStudentExercises() {
+    const recipients = myExerciseRecipients();
+    const selected = recipients.find((recipient) => recipient.assignment_id === state.selectedExerciseAssignmentId) || null;
+    return `
+      <div class="page-heading"><div><p class="eyebrow">Практика</p><h1>Мої вправи</h1><p class="muted">Виконуй вправи, одразу бач результат і повторюй спробу, якщо потрібно.</p></div></div>
+      <div class="exercise-layout"><div class="card"><h2>Призначені вправи</h2><div class="list">${recipients.length ? recipients.map((recipient) => {
+        const assignment = exerciseAssignmentById(recipient.assignment_id);
+        const template = assignment ? exerciseTemplateById(assignment.template_id) : null;
+        if (!assignment || !template) return "";
+        return `<button class="lesson-card exercise-assignment-card ${selected?.id === recipient.id ? "active" : ""}" type="button" data-action="select-exercise-assignment" data-assignment-id="${assignment.id}"><div class="lesson-card-head"><strong>${escape(template.title)}</strong>${exerciseStatusBadge(recipient.status)}</div><div class="meta">${escape(exerciseKindLabel(template.kind))} · ${assignment.deadline_at ? "дедлайн: " + escape(formatDateTime(assignment.deadline_at)) : "без дедлайну"}</div></button>`;
+      }).join("") : empty("Викладач ще не призначив вправ.")}</div></div><div class="card"><h2>Виконання</h2>${selected ? renderStudentExercisePanel(selected) : empty("Обери вправу зі списку, щоб почати.")}</div></div>
+    `;
+  }
+
+  function renderStudentExercisePanel(recipient) {
+    const assignment = exerciseAssignmentById(recipient.assignment_id);
+    const template = assignment ? exerciseTemplateById(assignment.template_id) : null;
+    if (!assignment || !template) return empty("Вправу більше не знайдено.");
+    const attemptInfo = recipient.attempts_count ? `<div class="meta">Спроб: ${recipient.attempts_count}${recipient.best_score === null || recipient.best_score === undefined ? "" : ` · найкращий результат: ${recipient.best_score}/${recipient.total_score || 1}`}</div>` : "";
+    const prompt = template.prompt ? `<div class="exercise-prompt">${escape(template.prompt)}</div>` : "";
+    const hidden = `<input type="hidden" name="assignmentStudentId" value="${recipient.id}" /><input type="hidden" name="kind" value="${escapeAttr(template.kind)}" />`;
+    if (template.kind === "multiple_choice") {
+      const options = exerciseOptions(template);
+      return `${prompt}${attemptInfo}<form id="submitExerciseForm" class="stack" style="margin-top:12px;">${hidden}<div class="exercise-options">${options.map((option) => `<label class="exercise-option"><input type="radio" name="answer" value="${escapeAttr(option.id)}" required />${escape(option.text)}</label>`).join("")}</div><button class="btn primary" type="submit">Перевірити</button></form>`;
+    }
+    if (template.kind === "fill_blank") {
+      return `${prompt}${attemptInfo}<form id="submitExerciseForm" class="stack" style="margin-top:12px;">${hidden}<div class="field"><label>Твоя відповідь</label><input name="answer" required autocomplete="off" /></div><button class="btn primary" type="submit">Перевірити</button></form>`;
+    }
+    if (template.kind === "wordwall") {
+      const url = safeWordwallUrl(template.content?.url);
+      return `${prompt}${attemptInfo}<div class="wordwall-box"><strong>Вправа Wordwall</strong><p>Відкрий вправу в новій вкладці. Після завершення повернися сюди й надішли позначку викладачу.</p>${url ? `<a class="btn secondary" href="${escapeAttr(url)}" target="_blank" rel="noopener">Відкрити Wordwall</a>` : '<div class="msg error">Посилання на Wordwall недоступне.</div>'}</div><form id="submitExerciseForm" class="stack" style="margin-top:12px;">${hidden}<button class="btn primary" type="submit">Я виконав/ла вправу</button></form>`;
+    }
+    return empty("Цей тип вправи ще не підтримується.");
   }
 
   function renderLessonForm(students) {
@@ -1377,6 +1576,63 @@
     return state.data.homeworkStudents.filter((item) => ownHomework.has(item.homework_id));
   }
 
+  function myExerciseRecipients() {
+    return state.data.exerciseAssignmentStudents.filter((recipient) => recipient.student_id === state.session.user.id);
+  }
+
+  function teacherExerciseRecipients() {
+    const ownAssignments = new Set(state.data.exerciseAssignments.filter((assignment) => assignment.teacher_id === state.session.user.id).map((assignment) => assignment.id));
+    return state.data.exerciseAssignmentStudents.filter((recipient) => ownAssignments.has(recipient.assignment_id));
+  }
+
+  function exerciseAssignmentById(id) {
+    return state.data.exerciseAssignments.find((assignment) => assignment.id === id) || null;
+  }
+
+  function exerciseTemplateById(id) {
+    return state.data.exerciseTemplates.find((template) => template.id === id) || null;
+  }
+
+  function exerciseOptions(template) {
+    const options = Array.isArray(template?.content?.options) ? template.content.options : [];
+    return options.filter((option) => option && typeof option.id === "string" && typeof option.text === "string" && option.text.trim());
+  }
+
+  function safeWordwallUrl(value) {
+    try {
+      const url = new URL(String(value || ""));
+      const host = url.hostname.toLowerCase();
+      return url.protocol === "https:" && (host === "wordwall.net" || host.endsWith(".wordwall.net")) ? url.toString() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function wordwallUrl(value) {
+    const url = safeWordwallUrl(value);
+    if (!url) throw new Error("Додай коректне захищене посилання на Wordwall.");
+    return url;
+  }
+
+  function exerciseKindLabel(kind) {
+    return { multiple_choice: "Вибір варіанту", fill_blank: "Пропущене слово", wordwall: "Wordwall" }[kind] || "Вправа";
+  }
+
+  function exerciseStatusLabel(status) {
+    return { not_started: "Не розпочато", completed: "Перевірено", submitted: "Очікує підтвердження", reviewed: "Підтверджено" }[status] || status;
+  }
+
+  function exerciseStatusBadge(status) {
+    return `<span class="exercise-status exercise-status-${escapeAttr(status)}">${escape(exerciseStatusLabel(status))}</span>`;
+  }
+
+  function toggleExerciseTemplateFields(form) {
+    const kind = value(form, "exerciseKind");
+    form.querySelectorAll("[data-exercise-kind-fields]").forEach((section) => {
+      section.classList.toggle("is-visible", section.dataset.exerciseKindFields === kind);
+    });
+  }
+
   function lessonStudents(lessonId) {
     return state.data.lessonStudents.filter((item) => item.lesson_id === lessonId);
   }
@@ -1727,6 +1983,13 @@
     if (error?.name === "NotFoundError") return "Мікрофон не знайдено. Під’єднай його або додай аудіофайл вручну.";
     if (text.includes("No active price")) return "Для цього учня немає активного тарифу. Адміністратор має вказати ціну уроку.";
     if (text.includes("Selected student is not assigned")) return "Цей учень не прикріплений до викладача.";
+    if (text.includes("At least one student is required")) return "Обери хоча б одного учня.";
+    if (text.includes("Exercise title is required")) return "Додай назву вправи для бібліотеки.";
+    if (text.includes("Multiple choice needs options")) return "Для вибору варіанту потрібні щонайменше дві відповіді та позначений правильний варіант.";
+    if (text.includes("Fill in the blank needs")) return "Додай хоча б один правильний варіант відповіді.";
+    if (text.includes("A secure Wordwall link is required")) return "Додай коректне посилання https://wordwall.net/...";
+    if (text.includes("Exercise template access denied") || text.includes("Exercise access denied")) return "Немає доступу до цієї вправи.";
+    if (text.includes("Only Wordwall assignments can be confirmed")) return "Вручну можна підтвердити лише вправу Wordwall.";
     if (text.includes("overlaps an existing lesson")) return "Цей час перетинається з іншим активним заняттям у твоєму календарі.";
     if (text.includes("Selected subject is unavailable")) return "Обраний предмет недоступний. Онови сторінку та вибери активний предмет.";
     if (text.includes("financial history cannot be deleted")) return "Урок уже має фінансову історію. Замість видалення зміни його статус на «Скасовано».";

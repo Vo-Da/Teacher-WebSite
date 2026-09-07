@@ -1065,6 +1065,115 @@ textarea:focus {
   white-space: pre-wrap;
 }
 
+.exercise-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.9fr) minmax(0, 1.4fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.exercise-kind-fields {
+  display: none;
+  gap: 10px;
+}
+
+.exercise-kind-fields.is-visible {
+  display: grid;
+}
+
+.exercise-kind-badge,
+.exercise-status {
+  display: inline-flex;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.exercise-kind-badge {
+  color: #38617b;
+  background: #e8eff7;
+}
+
+.exercise-status-not_started {
+  color: #38617b;
+  background: #e8eff7;
+}
+
+.exercise-status-completed,
+.exercise-status-reviewed {
+  color: #167341;
+  background: #dff7e9;
+}
+
+.exercise-status-submitted {
+  color: #7041a8;
+  background: #f1e8ff;
+}
+
+.exercise-prompt {
+  margin-top: 8px;
+  white-space: pre-wrap;
+  line-height: 1.55;
+}
+
+.exercise-link {
+  display: inline-block;
+  margin-top: 8px;
+  color: #0f766e;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.exercise-assignment-card {
+  display: grid;
+  gap: 3px;
+}
+
+.exercise-options {
+  display: grid;
+  gap: 8px;
+}
+
+.exercise-option {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fbfdff;
+  cursor: pointer;
+}
+
+.exercise-option:has(input:checked) {
+  border-color: var(--accent);
+  background: #ecfeff;
+}
+
+.exercise-option input {
+  width: auto;
+  margin: 0;
+}
+
+.wordwall-box {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px dashed #8ec8c2;
+  border-radius: 10px;
+  background: #f4fbfa;
+}
+
+.wordwall-box p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
 .two-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1310,6 +1419,10 @@ body.is-loading {
     grid-template-columns: 1fr;
     gap: 16px;
     padding-top: 16px;
+  }
+
+  .exercise-layout {
+    grid-template-columns: 1fr;
   }
 
   .school-nav {
