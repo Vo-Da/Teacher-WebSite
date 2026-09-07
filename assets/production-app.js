@@ -377,6 +377,26 @@
         previewExerciseImport(target.closest("form"));
         return;
       }
+      if (action === "add-word-order-token") {
+        addWordOrderToken(target);
+        return;
+      }
+      if (action === "remove-word-order-token") {
+        removeWordOrderToken(target);
+        return;
+      }
+      if (action === "shuffle-word-order-tokens") {
+        shuffleWordOrderTokens(target);
+        return;
+      }
+      if (action === "select-matching-left") {
+        selectMatchingLeft(target);
+        return;
+      }
+      if (action === "select-matching-right") {
+        selectMatchingRight(target);
+        return;
+      }
       if (action === "open-student-card") {
         state.selectedStudentId = target.dataset.studentId || null;
         renderDashboard();
@@ -755,9 +775,7 @@
 
     let content = {};
     let answerData = {};
-    if (kind === "multiple_choice") {
-      ({ content, answerData } = buildImportedExercise(value(form, "importRows"), kind));
-    } else if (kind === "fill_blank") {
+    if (["multiple_choice", "fill_blank", "word_order", "matching_pairs"].includes(kind)) {
       ({ content, answerData } = buildImportedExercise(value(form, "importRows"), kind));
     } else if (kind === "wordwall") {
       content = { url: wordwallUrl(value(form, "wordwallUrl")) };
@@ -810,7 +828,8 @@
     const kind = value(form, "kind");
     const assignmentStudentId = value(form, "assignmentStudentId");
     const answers = kind === "wordwall" ? {} : exerciseAnswers(form);
-    if (kind !== "wordwall" && !Object.keys(answers).length) throw new Error("Дай відповіді перед перевіркою.");
+    const hasAnswer = Object.values(answers).some((answer) => String(answer).trim() && String(answer).trim() !== "[]");
+    if (kind !== "wordwall" && !hasAnswer) throw new Error("Дай відповіді перед перевіркою.");
     const { data, error: submitError } = await state.client.rpc("submit_exercise_attempt", {
       p_assignment_student_id: assignmentStudentId,
       p_answers: answers
@@ -1090,13 +1109,15 @@
   function renderExerciseTemplateForm(groups) {
     return `
       <form id="createExerciseTemplateForm" class="stack">
-        <div class="field"><label>Тип вправи</label><select name="exerciseKind"><option value="multiple_choice">Вибрати правильний варіант</option><option value="fill_blank">Вставити пропущене слово</option><option value="wordwall">Wordwall</option></select></div>
+        <div class="field"><label>Тип вправи</label><select name="exerciseKind"><option value="multiple_choice">Вибрати правильний варіант</option><option value="fill_blank">Вставити пропущене слово</option><option value="word_order">Поставити слова в правильному порядку</option><option value="matching_pairs">Знайти пари</option><option value="wordwall">Wordwall</option></select></div>
         <div class="field"><label>Група / тема <span class="field-optional">(необов’язково)</span></label><select name="groupId"><option value="">Без групи</option>${groups.map((group) => `<option value="${group.id}">${escape(group.name)}</option>`).join("")}</select></div>
         <div class="field"><label>Назва вправи</label><input name="title" maxlength="200" placeholder="Наприклад, Present Simple: повторення" /></div>
         <div class="field"><label>Текст / інструкція <span class="field-optional">(необов’язково)</span></label><textarea name="prompt" maxlength="10000" placeholder="Напиши запитання, речення з пропуском або коротку інструкцію."></textarea></div>
-        <div class="exercise-import-fields" data-exercise-import-fields><div class="field"><label>Рядки вправи</label><textarea name="importRows" rows="10" placeholder="She ___ to school. / go;goes;going;gone / goes"></textarea></div><button class="btn small secondary" type="button" data-action="preview-exercise-import">Перевірити рядки</button><div class="exercise-import-preview" data-exercise-import-preview></div></div>
+        <div class="exercise-import-fields" data-exercise-import-fields><div class="field"><label>Рядки вправи</label><textarea name="importRows" data-exercise-import-input rows="10" placeholder="She ___ to school. / go;goes;going;gone / goes"></textarea></div><button class="btn small secondary" type="button" data-action="preview-exercise-import">Перевірити рядки</button><div class="exercise-import-preview" data-exercise-import-preview></div></div>
         <div class="exercise-kind-fields is-visible" data-exercise-kind-fields="multiple_choice"><div class="filebox"><strong>Формат для вибору варіанту</strong><br><code>Речення / варіант 1;варіант 2;... / правильний варіант</code><br><span class="meta">Кожен рядок - окреме завдання. Максимум 30 рядків.</span></div></div>
         <div class="exercise-kind-fields" data-exercise-kind-fields="fill_blank"><div class="filebox"><strong>Формат для пропуску</strong><br><code>Речення /  / правильна відповідь;допустима відповідь</code><br><span class="meta">Середня колонка лишається порожньою. Максимум 30 рядків.</span></div></div>
+        <div class="exercise-kind-fields" data-exercise-kind-fields="word_order"><div class="filebox"><strong>Формат для порядку слів</strong><br><code>She / goes / to / school / every / day.</code><br><span class="meta">Один рядок - одне речення. Слова мають бути в правильному порядку; учень отримає їх перемішаними. Максимум 30 речень.</span></div></div>
+        <div class="exercise-kind-fields" data-exercise-kind-fields="matching_pairs"><div class="filebox"><strong>Формат для пар</strong><br><code>go / went</code><br><span class="meta">Один рядок - одна пара. Учень побачить дві перемішані колонки. Для однієї вправи додай від 2 до 30 пар.</span></div></div>
         <div class="exercise-kind-fields" data-exercise-kind-fields="wordwall"><div class="field"><label>Посилання на Wordwall</label><input name="wordwallUrl" type="url" placeholder="https://wordwall.net/..." /><div class="meta">Учень відкриє вправу в Wordwall, а результат перевіриш у своєму кабінеті Wordwall.</div></div></div>
         <button class="btn primary" type="submit">Додати до бібліотеки</button>
       </form>
@@ -1284,10 +1305,11 @@
   function renderTeacherExerciseAttempt(template, attempt, index) {
     const score = attempt.score === null || attempt.score === undefined ? "Без автоматичної оцінки" : `${attempt.score}/${attempt.total_score || 0}`;
     const label = index === 0 ? "Перша спроба" : `Спроба ${index + 1}`;
-    return `<details class="teacher-exercise-attempt" ${index === 0 ? "open" : ""}><summary><strong>${label}</strong><span class="meta">${escape(formatDateTime(attempt.submitted_at))} · ${score}</span></summary><div class="teacher-exercise-answers">${exerciseItems(template).map((item, questionIndex) => renderTeacherExerciseAnswer(item, template.kind, questionIndex + 1, attempt)).join("")}</div></details>`;
+    return `<details class="teacher-exercise-attempt" ${index === 0 ? "open" : ""}><summary><strong>${label}</strong><span class="meta">${escape(formatDateTime(attempt.submitted_at))} · ${score}</span></summary><div class="teacher-exercise-answers">${exerciseItems(template).map((item, questionIndex) => renderTeacherExerciseAnswer(item, template, questionIndex + 1, attempt)).join("")}</div></details>`;
   }
 
-  function renderTeacherExerciseAnswer(item, kind, number, attempt) {
+  function renderTeacherExerciseAnswer(item, template, number, attempt) {
+    const kind = template.kind;
     const answer = String(attempt.answers?.[item.id] || "");
     const result = typeof attempt.results?.[item.id] === "boolean" ? attempt.results[item.id] : null;
     const stateClass = result === true ? "is-correct" : result === false ? "is-incorrect" : "";
@@ -1298,6 +1320,15 @@
         const selected = answer === option.id;
         return `<div class="teacher-exercise-option ${selected ? stateClass : ""}">${escape(option.text)}${selected ? '<span>Відповідь учня</span>' : ""}</div>`;
       }).join("")}</div><p class="exercise-feedback ${stateClass}">${label}</p></section>`;
+    }
+    if (kind === "word_order") {
+      const tokenMap = new Map((Array.isArray(item.tokens) ? item.tokens : []).map((token) => [token.id, token.text]));
+      const words = parseExerciseAnswerArray(answer).map((tokenId) => tokenMap.get(tokenId)).filter(Boolean).join(" ");
+      return `<section class="teacher-exercise-question ${stateClass}"><strong>${number}. Порядок слів</strong><div class="teacher-exercise-text-answer ${stateClass}">${escape(words || "Відповіді немає")}</div><p class="exercise-feedback ${stateClass}">${label}</p></section>`;
+    }
+    if (kind === "matching_pairs") {
+      const rightText = matchingRightOptions(template).find((option) => option.id === answer)?.text || "Відповіді немає";
+      return `<section class="teacher-exercise-question ${stateClass}"><strong>${number}. ${escape(item.left?.text || "Пара")}</strong><div class="teacher-exercise-text-answer ${stateClass}">${escape(rightText)}</div><p class="exercise-feedback ${stateClass}">${label}</p></section>`;
     }
     return `<section class="teacher-exercise-question ${stateClass}"><strong>${number}. ${escape(item.prompt)}</strong><div class="teacher-exercise-text-answer ${stateClass}">${escape(answer || "Відповіді немає")}</div><p class="exercise-feedback ${stateClass}">${label}</p></section>`;
   }
@@ -1338,7 +1369,10 @@
       return `<details class="filebox exercise-homework"><summary class="exercise-summary"><strong>${escape(exerciseTemplateLabel(template))}</strong>${exerciseStatusBadge(recipient.status)}</summary><div class="exercise-homework-content">${prompt}${attemptInfo}<div class="wordwall-box"><p>Відкрий вправу в новій вкладці, а після завершення повернися сюди.</p>${url ? `<a class="btn secondary" href="${escapeAttr(url)}" target="_blank" rel="noopener">Відкрити Wordwall</a>` : '<div class="msg error">Посилання на Wordwall недоступне.</div>'}</div><form id="submitExerciseForm" class="stack" style="margin-top:12px;">${hidden}<button class="btn primary" type="submit">Я виконав/ла вправу</button></form></div></details>`;
     }
     const items = exerciseItems(template);
-    return `<details class="filebox exercise-homework"><summary class="exercise-summary"><strong>${escape(exerciseTemplateLabel(template))}</strong>${exerciseStatusBadge(recipient.status)}</summary><div class="exercise-homework-content">${prompt}${attemptInfo}<form id="submitExerciseForm" class="stack" style="margin-top:12px;">${hidden}<div class="exercise-question-list">${items.map((item, index) => renderExerciseQuestion(item, template.kind, index + 1, latestAttempt)).join("")}</div><button class="btn primary" type="submit">Перевірити всі відповіді</button></form></div></details>`;
+    const questions = template.kind === "matching_pairs"
+      ? renderMatchingPairsExercise(template, latestAttempt)
+      : `<div class="exercise-question-list">${items.map((item, index) => renderExerciseQuestion(item, template.kind, index + 1, latestAttempt)).join("")}</div>`;
+    return `<details class="filebox exercise-homework"><summary class="exercise-summary"><strong>${escape(exerciseTemplateLabel(template))}</strong>${exerciseStatusBadge(recipient.status)}</summary><div class="exercise-homework-content">${prompt}${attemptInfo}<form id="submitExerciseForm" class="stack" style="margin-top:12px;">${hidden}${questions}<button class="btn primary" type="submit">Перевірити всі відповіді</button></form></div></details>`;
   }
 
   function renderExerciseQuestion(item, kind, number, attempt) {
@@ -1357,7 +1391,148 @@
         return `<label class="exercise-option${optionClass}"><input type="radio" name="answer-${escapeAttr(item.id)}" value="${escapeAttr(option.id)}" ${isSelected ? "checked" : ""} />${escape(option.text)}</label>`;
       }).join("")}</div>${feedback}</fieldset>`;
     }
+    if (kind === "word_order") return renderWordOrderQuestion(item, number, answer, result, feedback);
     return `<div class="exercise-question ${result === true ? "is-correct" : result === false ? "is-incorrect" : ""}"><label>${number}. ${escape(item.prompt)}<input class="${result === true ? "is-correct" : result === false ? "is-incorrect" : ""}" name="answer-${escapeAttr(item.id)}" value="${escapeAttr(answer)}" autocomplete="off" /></label>${feedback}</div>`;
+  }
+
+  function renderWordOrderQuestion(item, number, rawAnswer, result, feedback) {
+    const tokens = Array.isArray(item.tokens) ? item.tokens.filter((token) => token?.id && token?.text) : [];
+    const tokenIds = new Set(tokens.map((token) => token.id));
+    const answerIds = parseExerciseAnswerArray(rawAnswer).filter((tokenId) => tokenIds.has(tokenId));
+    const answerTokens = answerIds.map((tokenId) => tokens.find((token) => token.id === tokenId)).filter(Boolean);
+    return `<fieldset class="exercise-question word-order-question ${result === true ? "is-correct" : result === false ? "is-incorrect" : ""}" data-word-order-board><legend>${number}. Склади речення</legend><input type="hidden" name="answer-${escapeAttr(item.id)}" value="${escapeAttr(JSON.stringify(answerIds))}" /><div class="word-order-answer"><strong>Твій порядок</strong><div class="word-order-answer-tokens" data-word-order-answer>${answerTokens.length ? answerTokens.map((token) => renderWordOrderToken(token, "remove-word-order-token", "word-order-answer-token")).join("") : '<span class="meta">Натискай слова нижче, щоб скласти речення.</span>'}</div></div><div class="word-order-bank"><div class="item-head"><strong>Слова</strong><button type="button" class="btn small secondary" data-action="shuffle-word-order-tokens">Перемішати слова</button></div><div class="word-order-bank-tokens">${shuffled(tokens).map((token) => renderWordOrderToken(token, "add-word-order-token", "word-order-bank-token", answerIds.includes(token.id))).join("")}</div></div>${feedback}</fieldset>`;
+  }
+
+  function renderWordOrderToken(token, action, className, disabled = false) {
+    return `<button type="button" class="${className}" data-action="${action}" data-word-order-token data-token-id="${escapeAttr(token.id)}" data-token-text="${escapeAttr(token.text)}" ${disabled ? "disabled" : ""}>${escape(token.text)}</button>`;
+  }
+
+  function renderMatchingPairsExercise(template, attempt) {
+    const items = exerciseItems(template).filter((item) => item.left?.id && item.left?.text);
+    const rightOptions = matchingRightOptions(template);
+    const answers = matchingAnswersFor(items, attempt);
+    const matched = Object.values(answers).filter(Boolean).length;
+    return `<section class="matching-board" data-matching-board><div class="matching-board-status meta" data-matching-status>Поєднано: ${matched}/${items.length}.</div><div class="matching-columns"><div class="matching-column"><strong>Зліва</strong><div class="matching-list">${shuffled(items).map((item) => renderMatchingLeft(item, answers[item.id], rightOptions, attempt)).join("")}</div></div><div class="matching-column"><strong>Справа</strong><div class="matching-list">${shuffled(rightOptions).map((option) => `<button type="button" class="matching-option" data-action="select-matching-right" data-right-id="${escapeAttr(option.id)}" data-right-text="${escapeAttr(option.text)}">${escape(option.text)}</button>`).join("")}</div></div></div></section>`;
+  }
+
+  function matchingRightOptions(template) {
+    const options = Array.isArray(template?.content?.rightOptions) ? template.content.rightOptions : [];
+    return options.filter((option) => option?.id && option?.text);
+  }
+
+  function matchingAnswersFor(items, attempt) {
+    return Object.fromEntries(items.map((item) => [item.id, String(attempt?.answers?.[item.id] || "")]));
+  }
+
+  function parseExerciseAnswerArray(rawValue) {
+    try {
+      const parsed = JSON.parse(String(rawValue || "[]"));
+      return Array.isArray(parsed) ? parsed.filter((value) => typeof value === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function renderMatchingLeft(item, selectedRightId, rightOptions, attempt) {
+    const result = typeof attempt?.results?.[item.id] === "boolean" && selectedRightId ? attempt.results[item.id] : null;
+    const stateClass = result === true ? " is-correct" : result === false ? " is-incorrect" : "";
+    const selectedText = rightOptions.find((option) => option.id === selectedRightId)?.text || "Обрати відповідник";
+    return `<div class="matching-left-row"><input type="hidden" name="answer-${escapeAttr(item.id)}" value="${escapeAttr(selectedRightId || "")}" /><button type="button" class="matching-option matching-left${stateClass}" data-action="select-matching-left" data-pair-id="${escapeAttr(item.id)}" data-left-text="${escapeAttr(item.left.text)}"><span>${escape(item.left.text)}</span><small data-matching-left-answer>${escape(selectedText)}</small></button></div>`;
+  }
+
+  function addWordOrderToken(target) {
+    const board = target.closest("[data-word-order-board]");
+    if (!board || target.disabled) return;
+    const answerIds = wordOrderAnswerIds(board);
+    if (!answerIds.includes(target.dataset.tokenId)) answerIds.push(target.dataset.tokenId);
+    updateWordOrderBoard(board, answerIds);
+  }
+
+  function removeWordOrderToken(target) {
+    const board = target.closest("[data-word-order-board]");
+    if (!board) return;
+    updateWordOrderBoard(board, wordOrderAnswerIds(board).filter((tokenId) => tokenId !== target.dataset.tokenId));
+  }
+
+  function shuffleWordOrderTokens(target) {
+    const bank = target.closest("[data-word-order-board]")?.querySelector(".word-order-bank-tokens");
+    if (!bank) return;
+    shuffled(Array.from(bank.children)).forEach((token) => bank.append(token));
+  }
+
+  function wordOrderAnswerIds(board) {
+    const input = board.querySelector('input[name^="answer-"]');
+    return parseExerciseAnswerArray(input?.value);
+  }
+
+  function updateWordOrderBoard(board, answerIds) {
+    const input = board.querySelector('input[name^="answer-"]');
+    const tokenMap = new Map(Array.from(board.querySelectorAll("[data-word-order-token]")).map((token) => [token.dataset.tokenId, { id: token.dataset.tokenId, text: token.dataset.tokenText }]));
+    const validIds = answerIds.filter((tokenId) => tokenMap.has(tokenId));
+    if (input) input.value = JSON.stringify(validIds);
+    const answer = board.querySelector("[data-word-order-answer]");
+    if (answer) answer.innerHTML = validIds.length
+      ? validIds.map((tokenId) => renderWordOrderToken(tokenMap.get(tokenId), "remove-word-order-token", "word-order-answer-token")).join("")
+      : '<span class="meta">Натискай слова нижче, щоб скласти речення.</span>';
+    board.querySelectorAll(".word-order-bank-token").forEach((token) => {
+      token.disabled = validIds.includes(token.dataset.tokenId);
+    });
+  }
+
+  function selectMatchingLeft(target) {
+    const board = target.closest("[data-matching-board]");
+    const pairId = target.dataset.pairId;
+    if (!board || !pairId) return;
+    const input = board.querySelector(`[name="answer-${cssEscape(pairId)}"]`);
+    if (board.dataset.selectedPairId === pairId) {
+      if (input) input.value = "";
+      delete board.dataset.selectedPairId;
+      updateMatchingBoard(board, "Пару прибрано.");
+      return;
+    }
+    board.dataset.selectedPairId = pairId;
+    updateMatchingBoard(board, `Тепер обери відповідник для «${target.dataset.leftText}».`);
+  }
+
+  function selectMatchingRight(target) {
+    const board = target.closest("[data-matching-board]");
+    const selectedPairId = board?.dataset.selectedPairId;
+    if (!board || !selectedPairId) {
+      if (board) updateMatchingBoard(board, "Спочатку обери слово або фразу зліва.");
+      return;
+    }
+    const rightId = target.dataset.rightId;
+    board.querySelectorAll('input[name^="answer-"]').forEach((input) => {
+      if (input.value === rightId) input.value = "";
+    });
+    const input = board.querySelector(`[name="answer-${cssEscape(selectedPairId)}"]`);
+    if (input) input.value = rightId;
+    delete board.dataset.selectedPairId;
+    updateMatchingBoard(board, "Пару з’єднано.");
+  }
+
+  function updateMatchingBoard(board, message = "") {
+    const selectedPairId = board.dataset.selectedPairId || "";
+    const inputs = Array.from(board.querySelectorAll('input[name^="answer-"]'));
+    const rightOwner = new Map(inputs.filter((input) => input.value).map((input) => [input.value, input.name.slice("answer-".length)]));
+    const rightText = new Map(Array.from(board.querySelectorAll("[data-right-id]")).map((option) => [option.dataset.rightId, option.dataset.rightText]));
+    board.querySelectorAll("[data-pair-id]").forEach((left) => {
+      const pairId = left.dataset.pairId;
+      const input = board.querySelector(`[name="answer-${cssEscape(pairId)}"]`);
+      const selectedRightId = input?.value || "";
+      left.classList.toggle("is-selected", pairId === selectedPairId);
+      left.classList.toggle("is-matched", Boolean(selectedRightId));
+      const answer = left.querySelector("[data-matching-left-answer]");
+      if (answer) answer.textContent = rightText.get(selectedRightId) || "Обрати відповідник";
+    });
+    board.querySelectorAll("[data-right-id]").forEach((right) => {
+      const owner = rightOwner.get(right.dataset.rightId);
+      right.disabled = Boolean(owner && owner !== selectedPairId);
+      right.classList.toggle("is-used", Boolean(owner));
+    });
+    const matched = inputs.filter((input) => input.value).length;
+    const status = board.querySelector("[data-matching-status]");
+    if (status) status.textContent = message || `Поєднано: ${matched}/${inputs.length}.`;
   }
 
   function renderLessonFeed(lessons) {
@@ -1763,6 +1938,9 @@
     if (!rows.length) throw new Error("Додай хоча б один рядок вправи.");
     if (rows.length > 30) throw new Error("В одній вправі може бути щонайбільше 30 рядків.");
 
+    if (kind === "word_order") return parseWordOrderRows(rows);
+    if (kind === "matching_pairs") return parseMatchingPairRows(rows);
+
     return rows.map((row, index) => {
       const rowNumber = index + 1;
       const columns = row.split("/").map((column) => column.trim());
@@ -1792,12 +1970,54 @@
     });
   }
 
+  function parseWordOrderRows(rows) {
+    return rows.map((row, index) => {
+      const tokenTexts = row.split("/").map((token) => token.trim()).filter(Boolean);
+      const rowNumber = index + 1;
+      if (tokenTexts.length < 2) throw new Error(`Рядок ${rowNumber}: додай щонайменше два слова, розділені символом /.`);
+      const id = `q${rowNumber}`;
+      const orderedTokens = tokenTexts.map((text, tokenIndex) => ({ id: `${id}-t${tokenIndex + 1}`, text }));
+      return { id, prompt: "Склади речення зі слів", tokens: shuffled(orderedTokens), orderedTokens, correctTokenIds: orderedTokens.map((token) => token.id) };
+    });
+  }
+
+  function parseMatchingPairRows(rows) {
+    if (rows.length < 2) throw new Error("Для вправи з парами додай щонайменше два рядки.");
+    return rows.map((row, index) => {
+      const columns = row.split("/").map((column) => column.trim());
+      const rowNumber = index + 1;
+      if (columns.length !== 2 || !columns[0] || !columns[1]) throw new Error(`Рядок ${rowNumber}: додай ліву й праву частини пари, розділені символом /.`);
+      const id = `q${rowNumber}`;
+      return {
+        id,
+        prompt: "Знайди відповідник",
+        left: { id: `${id}-left`, text: columns[0] },
+        right: { id: `${id}-right`, text: columns[1] }
+      };
+    });
+  }
+
   function buildImportedExercise(rawRows, kind) {
     const rows = parseImportedExerciseRows(rawRows, kind);
     if (kind === "multiple_choice") {
       return {
         content: { items: rows.map(({ id, prompt, options }) => ({ id, prompt, options })) },
         answerData: { items: rows.map(({ id, acceptedAnswers }) => ({ id, correctOptionId: acceptedAnswers[0] })) }
+      };
+    }
+    if (kind === "word_order") {
+      return {
+        content: { items: rows.map(({ id, prompt, tokens }) => ({ id, prompt, tokens })) },
+        answerData: { items: rows.map(({ id, correctTokenIds }) => ({ id, correctTokenIds })) }
+      };
+    }
+    if (kind === "matching_pairs") {
+      return {
+        content: {
+          items: rows.map(({ id, prompt, left }) => ({ id, prompt, left })),
+          rightOptions: shuffled(rows.map(({ right }) => right))
+        },
+        answerData: { items: rows.map(({ id, right }) => ({ id, correctRightId: right.id })) }
       };
     }
     return {
@@ -1811,10 +2031,23 @@
     if (!preview) return;
     try {
       const rows = parseImportedExerciseRows(value(form, "importRows"), value(form, "exerciseKind"));
-      preview.innerHTML = `<div class="msg success">Готово: у вправі ${rows.length} завдань.</div><ol class="exercise-import-list">${rows.map((row) => `<li>${escape(row.prompt)} <span class="meta">${row.options ? `· ${row.options.length} варіанти` : `· ${row.acceptedAnswers.length} допустимі відповіді`}</span></li>`).join("")}</ol>`;
+      const kind = value(form, "exerciseKind");
+      preview.innerHTML = `<div class="msg success">Готово: у вправі ${rows.length} завдань.</div><ol class="exercise-import-list">${rows.map((row) => `<li>${escape(exerciseImportPreviewLabel(row, kind))} <span class="meta">${exerciseImportPreviewDetail(row, kind)}</span></li>`).join("")}</ol>`;
     } catch (error) {
       preview.innerHTML = `<div class="msg error">${escape(error.message || "Перевір формат рядків.")}</div>`;
     }
+  }
+
+  function exerciseImportPreviewLabel(row, kind) {
+    if (kind === "word_order") return row.orderedTokens.map((token) => token.text).join(" · ");
+    if (kind === "matching_pairs") return `${row.left.text} - ${row.right.text}`;
+    return row.prompt;
+  }
+
+  function exerciseImportPreviewDetail(row, kind) {
+    if (kind === "word_order") return `· ${row.tokens.length} слів`;
+    if (kind === "matching_pairs") return "· одна пара";
+    return row.options ? `· ${row.options.length} варіанти` : `· ${row.acceptedAnswers.length} допустимі відповіді`;
   }
 
   function exerciseAnswers(form) {
@@ -1828,6 +2061,20 @@
 
   function normalizedExerciseAnswer(answer) {
     return String(answer || "").trim().toLocaleLowerCase("uk-UA").replace(/\s+/g, " ");
+  }
+
+  function cssEscape(value) {
+    if (window.CSS?.escape) return window.CSS.escape(value);
+    return String(value).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+  }
+
+  function shuffled(items) {
+    const result = [...items];
+    for (let index = result.length - 1; index > 0; index -= 1) {
+      const nextIndex = Math.floor(Math.random() * (index + 1));
+      [result[index], result[nextIndex]] = [result[nextIndex], result[index]];
+    }
+    return result;
   }
 
   function safeWordwallUrl(value) {
@@ -1847,7 +2094,7 @@
   }
 
   function exerciseKindLabel(kind) {
-    return { multiple_choice: "Вибір варіанту", fill_blank: "Пропущене слово", wordwall: "Wordwall" }[kind] || "Вправа";
+    return { multiple_choice: "Вибір варіанту", fill_blank: "Пропущене слово", word_order: "Порядок слів", matching_pairs: "Пари", wordwall: "Wordwall" }[kind] || "Вправа";
   }
 
   function exerciseStatusLabel(status) {
@@ -1864,6 +2111,13 @@
       section.classList.toggle("is-visible", section.dataset.exerciseKindFields === kind);
     });
     form.querySelector("[data-exercise-import-fields]")?.classList.toggle("is-hidden", kind === "wordwall");
+    const importInput = form.querySelector("[data-exercise-import-input]");
+    if (importInput) importInput.placeholder = {
+      multiple_choice: "She ___ to school. / go;goes;going;gone / goes",
+      fill_blank: "She ___ to school. /  / goes",
+      word_order: "She / goes / to / school / every / day.",
+      matching_pairs: "go / went"
+    }[kind] || "";
     const preview = form.querySelector("[data-exercise-import-preview]");
     if (preview) preview.innerHTML = "";
   }
@@ -2240,6 +2494,8 @@
     if (text.includes("Exercise items are invalid") || text.includes("Each exercise item needs") || text.includes("Exercise question ids must be unique")) return "Перевір рядки вправи: кожне завдання має мати текст і правильну відповідь.";
     if (text.includes("Multiple choice item needs")) return "У кожному рядку з вибором варіанту має бути щонайменше два варіанти та правильна відповідь.";
     if (text.includes("Fill in the blank item needs")) return "У кожному рядку з пропущеним словом додай хоча б одну правильну відповідь.";
+    if (text.includes("Word order item needs")) return "У кожному реченні додай щонайменше два різні слова в правильному порядку.";
+    if (text.includes("Matching pairs need") || text.includes("Matching pair needs")) return "Для вправи з парами додай щонайменше дві повні унікальні пари.";
     if (text.includes("Homework has no recipients")) return "У цього домашнього завдання немає учнів, тому вправу не можна додати.";
     if (text.includes("A secure Wordwall link is required")) return "Додай коректне посилання https://wordwall.net/...";
     if (text.includes("Exercise template access denied") || text.includes("Exercise access denied")) return "Немає доступу до цієї вправи.";

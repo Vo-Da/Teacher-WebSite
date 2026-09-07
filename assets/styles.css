@@ -1273,6 +1273,136 @@ textarea:focus {
   background: #fffafa;
 }
 
+.word-order-question,
+.word-order-answer,
+.word-order-bank {
+  display: grid;
+  gap: 8px;
+}
+
+.word-order-answer-tokens,
+.word-order-bank-tokens {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-height: 42px;
+  padding: 8px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.word-order-answer-tokens {
+  border-color: #8ec8c2;
+  background: #f4fbfa;
+}
+
+.word-order-answer-token,
+.word-order-bank-token {
+  border: 1px solid #b8ded9;
+  border-radius: 8px;
+  padding: 7px 10px;
+  color: #155e63;
+  background: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.word-order-answer-token {
+  border-color: #8ec8c2;
+  background: #dff4f0;
+}
+
+.word-order-bank-token:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: #eaf7f5;
+}
+
+.word-order-bank-token:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.matching-board {
+  display: grid;
+  gap: 10px;
+}
+
+.matching-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.matching-column,
+.matching-list {
+  display: grid;
+  gap: 7px;
+}
+
+.matching-column {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fbfdff;
+}
+
+.matching-option {
+  display: flex;
+  width: 100%;
+  min-height: 40px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--ink);
+  background: #fff;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.matching-option:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: #eaf7f5;
+}
+
+.matching-option small {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+}
+
+.matching-option.is-selected {
+  border-color: #16877f;
+  box-shadow: 0 0 0 2px rgba(22, 135, 127, 0.14);
+}
+
+.matching-option.is-matched {
+  border-color: #8ec8c2;
+  background: #f4fbfa;
+}
+
+.matching-option.is-used,
+.matching-option:disabled {
+  cursor: default;
+  opacity: 0.48;
+}
+
+.matching-left.is-correct {
+  border-color: #86d3a5;
+  background: #e6f9ed;
+}
+
+.matching-left.is-incorrect {
+  border-color: #f2aaa9;
+  background: #ffeaea;
+}
+
 .exercise-feedback {
   margin: 0;
   font-size: 13px;
@@ -1794,6 +1924,10 @@ body.is-loading {
   }
 
   .exercise-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .matching-columns {
     grid-template-columns: 1fr;
   }
 

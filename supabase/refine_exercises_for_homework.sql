@@ -3,6 +3,13 @@
 -- It moves exercises into homework, supports up to 30 auto-checked questions,
 -- and keeps answer keys unavailable to students.
 
+alter table public.exercise_templates
+  drop constraint if exists exercise_templates_kind_check;
+
+alter table public.exercise_templates
+  add constraint exercise_templates_kind_check
+  check (kind in ('multiple_choice', 'fill_blank', 'word_order', 'matching_pairs', 'wordwall'));
+
 create table if not exists public.exercise_groups (
   id uuid primary key default gen_random_uuid(),
   school_id uuid not null references public.schools(id) on delete cascade,
@@ -151,6 +158,7 @@ declare
   v_template_id uuid;
   v_items jsonb;
   v_answer_items jsonb;
+  v_right_options jsonb;
   v_item jsonb;
   v_answer_item jsonb;
   v_item_id text;
@@ -162,7 +170,7 @@ begin
   if char_length(trim(p_title)) < 2 then
     raise exception 'Exercise title is required';
   end if;
-  if p_kind not in ('multiple_choice', 'fill_blank', 'wordwall') then
+  if p_kind not in ('multiple_choice', 'fill_blank', 'word_order', 'matching_pairs', 'wordwall') then
     raise exception 'Unsupported exercise type';
   end if;
   if jsonb_typeof(p_content) <> 'object' or jsonb_typeof(p_answer_data) <> 'object' then
@@ -177,7 +185,7 @@ begin
     end if;
   end if;
 
-  if p_kind in ('multiple_choice', 'fill_blank') then
+  if p_kind in ('multiple_choice', 'fill_blank', 'word_order', 'matching_pairs') then
     v_items := p_content -> 'items';
     v_answer_items := p_answer_data -> 'items';
     if jsonb_typeof(v_items) <> 'array' or jsonb_typeof(v_answer_items) <> 'array' then
@@ -185,11 +193,27 @@ begin
     end if;
     if jsonb_array_length(v_items) = 0
       or jsonb_array_length(v_items) > 30
-      or jsonb_array_length(v_items) <> jsonb_array_length(v_answer_items) then
+      or jsonb_array_length(v_items) <> jsonb_array_length(v_answer_items)
+      or (p_kind = 'matching_pairs' and jsonb_array_length(v_items) < 2) then
       raise exception 'Exercise items are invalid';
     end if;
     if (select count(distinct item.value ->> 'id') from jsonb_array_elements(v_items) as item(value)) <> jsonb_array_length(v_items) then
       raise exception 'Exercise question ids must be unique';
+    end if;
+    if p_kind = 'matching_pairs' then
+      v_right_options := p_content -> 'rightOptions';
+      if jsonb_typeof(v_right_options) <> 'array'
+        or jsonb_array_length(v_right_options) <> jsonb_array_length(v_items)
+        or (select count(distinct option_item.value ->> 'id') from jsonb_array_elements(v_right_options) as option_item(value)) <> jsonb_array_length(v_right_options)
+        or (select count(distinct answer_item.value ->> 'correctRightId') from jsonb_array_elements(v_answer_items) as answer_item(value)) <> jsonb_array_length(v_answer_items)
+        or (select count(distinct item.value -> 'left' ->> 'id') from jsonb_array_elements(v_items) as item(value)) <> jsonb_array_length(v_items)
+        or exists (
+          select 1 from jsonb_array_elements(v_right_options) as option_item(value)
+          where trim(coalesce(option_item.value ->> 'id', '')) = ''
+            or trim(coalesce(option_item.value ->> 'text', '')) = ''
+        ) then
+        raise exception 'Matching pairs need unique right-side options';
+      end if;
     end if;
 
     for v_item in select item.value from jsonb_array_elements(v_items) as item(value) loop
@@ -220,10 +244,42 @@ begin
           ) then
           raise exception 'Multiple choice item needs options and a correct answer';
         end if;
-      elsif jsonb_typeof(v_answer_item -> 'acceptedAnswers') <> 'array' then
+      elsif p_kind = 'fill_blank' and jsonb_typeof(v_answer_item -> 'acceptedAnswers') <> 'array' then
         raise exception 'Fill in the blank item needs an accepted answer';
-      elsif jsonb_array_length(v_answer_item -> 'acceptedAnswers') = 0 then
+      elsif p_kind = 'fill_blank' and jsonb_array_length(v_answer_item -> 'acceptedAnswers') = 0 then
         raise exception 'Fill in the blank item needs an accepted answer';
+      elsif p_kind = 'word_order' then
+        if jsonb_typeof(v_item -> 'tokens') <> 'array'
+          or jsonb_array_length(v_item -> 'tokens') < 2
+          or jsonb_typeof(v_answer_item -> 'correctTokenIds') <> 'array'
+          or jsonb_array_length(v_answer_item -> 'correctTokenIds') <> jsonb_array_length(v_item -> 'tokens')
+          or (select count(distinct token_item.value ->> 'id') from jsonb_array_elements(v_item -> 'tokens') as token_item(value)) <> jsonb_array_length(v_item -> 'tokens')
+          or exists (
+            select 1 from jsonb_array_elements(v_item -> 'tokens') as token_item(value)
+            where trim(coalesce(token_item.value ->> 'id', '')) = ''
+              or trim(coalesce(token_item.value ->> 'text', '')) = ''
+          )
+          or (select count(distinct answer_token.value) from jsonb_array_elements_text(v_answer_item -> 'correctTokenIds') answer_token(value)) <> jsonb_array_length(v_item -> 'tokens')
+          or exists (
+            select 1 from jsonb_array_elements_text(v_answer_item -> 'correctTokenIds') answer_token(value)
+            where not exists (
+              select 1 from jsonb_array_elements(v_item -> 'tokens') token_item(value)
+              where token_item.value ->> 'id' = answer_token.value
+            )
+          ) then
+          raise exception 'Word order item needs unique words and a complete answer order';
+        end if;
+      elsif p_kind = 'matching_pairs' then
+        if jsonb_typeof(v_item -> 'left') <> 'object'
+          or trim(coalesce(v_item -> 'left' ->> 'id', '')) = ''
+          or trim(coalesce(v_item -> 'left' ->> 'text', '')) = ''
+          or coalesce(v_answer_item ->> 'correctRightId', '') = ''
+          or not exists (
+            select 1 from jsonb_array_elements(v_right_options) as option_item(value)
+            where option_item.value ->> 'id' = v_answer_item ->> 'correctRightId'
+          ) then
+          raise exception 'Matching pair needs both sides and an answer key';
+        end if;
       end if;
     end loop;
   elsif coalesce(p_content ->> 'url', '') !~ '^https://([a-z0-9-]+\.)?wordwall\.net/' then
@@ -311,6 +367,7 @@ declare
   v_answer_item jsonb;
   v_item_id text;
   v_submitted_answer text;
+  v_submitted_json jsonb;
   v_normalized_answer text;
   v_correct boolean;
   v_score integer;
@@ -333,7 +390,7 @@ begin
     raise exception 'Exercise answers are invalid';
   end if;
 
-  if v_kind in ('multiple_choice', 'fill_blank') then
+  if v_kind in ('multiple_choice', 'fill_blank', 'word_order', 'matching_pairs') then
     v_total := 0;
     v_score := 0;
     for v_item in select item.value from jsonb_array_elements(coalesce(v_content -> 'items', '[]'::jsonb)) as item(value) loop
@@ -350,7 +407,7 @@ begin
       v_correct := false;
       if v_kind = 'multiple_choice' then
         v_correct := v_submitted_answer <> '' and v_submitted_answer = coalesce(v_answer_item ->> 'correctOptionId', '');
-      else
+      elsif v_kind = 'fill_blank' then
         v_normalized_answer := lower(regexp_replace(v_submitted_answer, '\s+', ' ', 'g'));
         select exists (
           select 1
@@ -358,6 +415,17 @@ begin
           where lower(regexp_replace(trim(accepted.answer), '\s+', ' ', 'g')) = v_normalized_answer
         ) into v_correct;
         v_correct := v_submitted_answer <> '' and v_correct;
+      elsif v_kind = 'word_order' then
+        begin
+          v_submitted_json := coalesce((p_answers ->> v_item_id)::jsonb, '[]'::jsonb);
+        exception when others then
+          v_submitted_json := '[]'::jsonb;
+        end;
+        v_correct := v_submitted_answer <> ''
+          and jsonb_typeof(v_submitted_json) = 'array'
+          and v_submitted_json = coalesce(v_answer_item -> 'correctTokenIds', '[]'::jsonb);
+      else
+        v_correct := v_submitted_answer <> '' and v_submitted_answer = coalesce(v_answer_item ->> 'correctRightId', '');
       end if;
       v_total := v_total + 1;
       if v_correct then v_score := v_score + 1; end if;
