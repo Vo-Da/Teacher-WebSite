@@ -20,6 +20,7 @@
     selectedStudentId: null,
     homeworkFilters: { studentStatus: "all", teacherStatus: "all", teacherStudentId: "all" },
     exerciseGroupsAvailable: true,
+    teacherTransfersAvailable: true,
     recording: null,
     showPasswordRecoveryRequest: false,
     passwordRecovery: new URLSearchParams(window.location.search).has("password-recovery"),
@@ -53,6 +54,7 @@
       exerciseAssignments: [],
       exerciseAssignmentStudents: [],
       exerciseAttempts: [],
+      teacherTransfers: [],
       attachments: [],
       studentInternalProfiles: [],
       studentInternalNotes: [],
@@ -97,6 +99,7 @@
     state.canBootstrapSchool = false;
     state.data = emptyData();
     state.exerciseGroupsAvailable = true;
+    state.teacherTransfersAvailable = true;
     state.selectedLessonId = null;
     state.selectedHomeworkId = null;
     state.selectedStudentId = null;
@@ -174,7 +177,7 @@
     const schoolId = state.membership.school_id;
     const canAdminister = hasRole("admin");
     const canManageStudentContext = state.activeRole === "admin" || state.activeRole === "teacher";
-    const [subjects, relations, lessons, homework, profiles, memberships, studentInternalProfiles, studentInternalNotes, exerciseGroups, exerciseTemplates, exerciseAssignments] = await Promise.all([
+    const [subjects, relations, lessons, homework, profiles, memberships, studentInternalProfiles, studentInternalNotes, exerciseGroups, exerciseTemplates, exerciseAssignments, teacherTransfers] = await Promise.all([
       selectRows("subjects", (q) => q.eq("school_id", schoolId).order("name")),
       selectRows("teacher_students", (q) => q.eq("school_id", schoolId).eq("is_active", true)),
       selectRows("lessons", (q) => q.eq("school_id", schoolId).order("starts_at")),
@@ -185,7 +188,8 @@
       canManageStudentContext ? selectRows("student_internal_notes", (q) => q.eq("school_id", schoolId).order("created_at", { ascending: false })) : Promise.resolve([]),
       selectExerciseGroups(schoolId),
       selectRows("exercise_templates", (q) => q.eq("school_id", schoolId).order("created_at", { ascending: false })),
-      selectRows("exercise_assignments", (q) => q.eq("school_id", schoolId).order("created_at", { ascending: false }))
+      selectRows("exercise_assignments", (q) => q.eq("school_id", schoolId).order("created_at", { ascending: false })),
+      selectTeacherTransfers(schoolId)
     ]);
 
     state.data.subjects = subjects;
@@ -199,6 +203,7 @@
     state.data.exerciseGroups = exerciseGroups;
     state.data.exerciseTemplates = exerciseTemplates;
     state.data.exerciseAssignments = exerciseAssignments;
+    state.data.teacherTransfers = teacherTransfers;
 
     const lessonIds = lessons.map((item) => item.id);
     const homeworkIds = homework.map((item) => item.id);
@@ -240,6 +245,18 @@
     } catch (error) {
       if (error?.code === "PGRST205" || error?.code === "42P01" || String(error?.message || "").includes("exercise_groups")) {
         state.exerciseGroupsAvailable = false;
+        return [];
+      }
+      throw error;
+    }
+  }
+
+  async function selectTeacherTransfers(schoolId) {
+    try {
+      return await selectRows("teacher_student_transfers", (q) => q.eq("school_id", schoolId));
+    } catch (error) {
+      if (error?.code === "PGRST205" || error?.code === "42P01" || String(error?.message || "").includes("teacher_student_transfers")) {
+        state.teacherTransfersAvailable = false;
         return [];
       }
       throw error;
@@ -588,6 +605,7 @@
       if (form.id === "bootstrapSchoolForm") await bootstrapSchool(form);
       if (form.id === "createSubjectForm") await createSubject(form);
       if (form.id === "assignTeacherStudentForm") await assignTeacherStudent(form);
+      if (form.id === "replaceTeacherForm") await replaceTeacher(form);
       if (form.id === "createRateForm") await createRate(form);
       if (form.id === "createLessonForm") await createLesson(form);
       if (form.id === "lessonCardForm") await saveLessonCard(form);
@@ -728,6 +746,31 @@
     }, { onConflict: "school_id,teacher_id,student_id" });
     if (error) throw error;
     state.notice = success("Учня прив’язано до викладача.");
+    await refreshContext();
+  }
+
+  async function replaceTeacher(form) {
+    const previousTeacherId = value(form, "previousTeacherId");
+    const newTeacherId = value(form, "newTeacherId");
+    const studentId = value(form, "studentId");
+    const shareArchive = value(form, "shareArchive") === "true";
+    const previousTeacher = nameOf(previousTeacherId);
+    const newTeacher = nameOf(newTeacherId);
+    const student = nameOf(studentId);
+    const archiveMessage = shareArchive
+      ? "Новий викладач отримає доступ лише для читання до завершених уроків, опублікованих домашніх, відповідей і файлів цього учня."
+      : "Навчальний архів не передаватиметься; новий викладач почне лише з новими уроками та домашніми.";
+    const message = `Замінити викладача для учня «${student}»?\n\n${previousTeacher} буде прибраний/а з активного списку учня, а ${newTeacher} отримає активний доступ. ${archiveMessage}\n\nЗаплановані заняття не переносяться автоматично. Уроки, фінанси й авторство попереднього викладача не зміняться.`;
+    if (!confirm(message)) return;
+    const { error } = await state.client.rpc("replace_student_teacher", {
+      p_school_id: state.school.id,
+      p_student_id: studentId,
+      p_previous_teacher_id: previousTeacherId,
+      p_new_teacher_id: newTeacherId,
+      p_share_archive: shareArchive
+    });
+    if (error) throw error;
+    state.notice = success(shareArchive ? "Викладача замінено. Новому викладачу відкрито архів учня." : "Викладача замінено. Новий викладач почне без архіву.");
     await refreshContext();
   }
 
@@ -1090,6 +1133,18 @@
           </form>
         </div>
       </div>
+      <div class="card"><h2>Замінити викладача</h2><p class="muted">Для передачі учня іншому викладачу. Старі уроки й фінанси не переписуються.</p>
+        ${state.teacherTransfersAvailable ? `<form id="replaceTeacherForm" class="stack">
+          <div class="three-fields">
+            ${selectField("previousTeacherId", "Поточний викладач", teachers, true, "Обери викладача")}
+            ${selectField("studentId", "Учень", students, true, "Обери учня")}
+            ${selectField("newTeacherId", "Новий викладач", teachers, true, "Обери викладача")}
+          </div>
+          <label class="role-option"><input name="shareArchive" type="checkbox" value="true" /><span><strong>Передати навчальний архів</strong><small>Новий викладач зможе переглядати завершені уроки, опубліковані домашні, відповіді та файли цього учня. Доступ лише для читання; фінанси не передаються.</small></span></label>
+          <div class="meta">Картка учня та внутрішні нотатки доступні новому викладачу після прив’язки завжди.</div>
+          <button class="btn primary" type="submit">Замінити викладача</button>
+        </form>` : '<div class="msg error">Для заміни викладача потрібно виконати SQL-оновлення з файлу supabase/add_teacher_transfer.sql у Supabase.</div>'}
+      </div>
       <div class="work-grid">
         <div class="card"><h2>Створити акаунт</h2><p class="muted">Новий користувач отримає активний доступ одразу. Для однієї людини можна вибрати кілька ролей.</p><form id="adminCreateUserForm" class="stack"><div class="field"><label>Ім’я та прізвище</label><input name="fullName" required /></div><div class="field"><label>Email</label><input name="email" type="email" required /></div><div class="field"><label>Тимчасовий пароль</label><input name="password" type="password" minlength="8" required /></div><div class="field"><label>Ролі</label>${roleCheckboxes(["student"])}</div><button class="btn primary" type="submit">Створити акаунт</button></form></div>
         <div class="card"><h2>Доступи</h2><p class="muted">Призупинення зберігає історію. Видалення після підтвердження прибирає акаунт і пов’язані дані назавжди.</p><div class="list">${state.data.memberships.filter((member) => member.status === "suspended").map((member) => `<div class="item"><div><p class="item-title">${escape(nameOf(member.user_id))}</p><div class="meta">${escape(roleTitles(membershipRoles(member)).join(", "))} · доступ призупинено</div></div><button class="btn small secondary" type="button" data-action="activate-user" data-user-id="${member.user_id}">Відновити</button></div>`).join("") || empty("Призупинених акаунтів немає.")}</div></div>
@@ -1165,6 +1220,7 @@
 
   function renderTeacherStudents() {
     const students = teacherStudents();
+    const archiveLessons = transferredArchiveLessons();
     return `
       <div class="page-heading"><div><p class="eyebrow">Моя група</p><h1>Учні</h1><p class="muted">Тут відображаються лише учні, яких закріпив адміністратор.</p></div></div>
       <div class="card"><div class="list">${students.map((student) => {
@@ -1172,16 +1228,19 @@
         const submitted = teacherHomeworkStudents().filter((row) => row.student_id === student.id && row.status === "submitted").length;
         return `<div class="item"><div class="item-head"><div><p class="item-title">${escape(student.full_name)}</p><div class="meta">Наступний урок: ${upcoming ? escape(formatDateTime(upcoming.starts_at)) + " · " + escape(subjectName(upcoming.subject_id)) : "не заплановано"}</div><div class="meta">Робіт на перевірці: ${submitted}</div></div><div class="item-actions"><span class="role-badge role-student">Учень</span><button class="btn small secondary" type="button" data-action="open-student-card" data-student-id="${student.id}">Картка учня</button></div></div></div>`;
       }).join("") || empty("Адміністратор ще не призначив тобі учнів.")}</div></div>
+      ${archiveLessons.length ? `<div class="card"><div class="item-head"><div><h2>Переданий архів занять</h2><p class="muted">Лише читання: завершені або скасовані заняття переданих учнів.</p></div><span class="role-badge role-teacher">Архів</span></div>${renderTransferredArchiveLessons(archiveLessons)}</div>` : ""}
       ${state.selectedStudentId ? renderStudentInternalCard(state.selectedStudentId) : ""}
     `;
   }
 
   function renderTeacherHomework() {
     const tasks = state.data.homework.filter((task) => task.teacher_id === state.session.user.id);
+    const archiveTasks = transferredArchiveHomework();
     const selected = selectedLesson();
     return `
       <div class="page-heading"><div><p class="eyebrow">Перевірка</p><h1>Домашні завдання</h1><p class="muted">Публікуй завдання, дивись відповіді й повертай роботу на доопрацювання.</p></div></div>
       <div class="work-grid"><div class="card"><h2>Нове домашнє</h2>${renderHomeworkForm(selected)}</div><div class="card"><h2>Роботи учнів</h2>${renderTeacherHomeworkFilters(tasks)}${renderTeacherHomeworkReview(tasks)}</div></div>
+      ${archiveTasks.length ? `<div class="card"><div class="item-head"><div><h2>Переданий архів домашніх</h2><p class="muted">Лише читання: зміна статусів, коментарів і файлів недоступна.</p></div><span class="role-badge role-teacher">Архів</span></div>${renderTeacherHomeworkArchive(archiveTasks)}</div>` : ""}
     `;
   }
 
@@ -1371,6 +1430,18 @@
       const feedbackForm = `<form id="feedbackForm" class="stack" style="margin-top:8px;"><input type="hidden" name="homeworkStudentId" value="${recipient.id}" /><div class="two-fields"><div class="field"><label>Статус</label><select name="status" required><option value="reviewed">Перевірено</option><option value="needs_revision">На доопрацювання</option></select></div><div class="field"><label>Оцінка <span class="field-optional">(необов’язково)</span></label><input name="grade" placeholder="Наприклад, 11/12" value="${escapeAttr(recipient.grade || "")}" /></div></div><div class="field"><label>Коментар <span class="field-optional">(необов’язково)</span></label><textarea name="comment">${escape(recipient.teacher_comment || "")}</textarea></div>${renderVoiceCapture(`feedback-${recipient.id}`, "Голосовий коментар")}${renderVideoCapture(`feedback-video-${recipient.id}`, "Відеокоментар")}<div class="field"><label>Виправлений файл <span class="field-optional">(необов’язково)</span></label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn small secondary" type="submit">Надіслати зворотний зв’язок</button></form>`;
       return `<div class="item"><p class="item-title">${escape(homeworkReviewLabel(task, recipient))}</p><div class="meta">Статус: ${submissionLabel(recipient.status)}${recipient.grade ? " · оцінка: " + escape(recipient.grade) : ""}</div>${submissions.map((submission) => `<div class="filebox"><div>${escape(submission.body || "Файли без тексту")}</div>${renderAttachments({ submission_id: submission.id })}</div>`).join("")}${renderTeacherHomeworkExercises(recipient)}${recipient.teacher_comment ? `<div class="meta">Мій коментар: ${escape(recipient.teacher_comment)}</div>` : ""}${canReview ? feedbackForm : '<div class="meta">Учень ще не надіслав роботу.</div>'}</div>`;
     }).join("") : empty("За цими фільтрами домашніх завдань немає.")}</div>`;
+  }
+
+  function renderTeacherHomeworkArchive(tasks) {
+    const rows = tasks.flatMap((task) => transferredArchiveRecipients(task).map((recipient) => ({ task, recipient })));
+    return `<div class="list">${rows.map(({ task, recipient }) => {
+      const submissions = visibleSubmissionsFor(recipient.id);
+      return `<div class="item"><p class="item-title">${escape(homeworkReviewLabel(task, recipient))}</p><div class="meta">Статус: ${submissionLabel(recipient.status)}${recipient.grade ? " · оцінка: " + escape(recipient.grade) : ""}</div>${task.description ? `<div class="filebox"><strong>Текст завдання</strong><div>${escape(task.description)}</div>${renderAttachments({ homework_id: task.id })}</div>` : renderAttachments({ homework_id: task.id })}${submissions.map((submission) => `<div class="filebox"><div>${escape(submission.body || "Файли без тексту")}</div>${renderAttachments({ submission_id: submission.id })}</div>`).join("")}${renderTeacherHomeworkExercises(recipient)}${recipient.teacher_comment ? `<div class="meta">Коментар попереднього викладача: ${escape(recipient.teacher_comment)}</div>` : ""}${renderAttachments({ homework_student_id: recipient.id })}</div>`;
+    }).join("") || empty("У переданому архіві немає домашніх завдань.")}</div>`;
+  }
+
+  function renderTransferredArchiveLessons(lessons) {
+    return `<div class="list">${lessons.map((lesson) => `<article class="lesson-card"><div class="lesson-card-head"><strong>${escape(formatDateTime(lesson.starts_at))} · ${escape(subjectName(lesson.subject_id))}</strong>${statusBadge(lesson.status)}</div><div>${escape(lesson.title)}</div><div class="meta">${escape(lessonStudents(lesson.id).map((row) => nameOf(row.student_id)).join(", ") || "Без учнів")}</div>${lesson.teacher_note ? `<div class="filebox"><strong>Нотатка до заняття</strong><div>${escape(lesson.teacher_note)}</div></div>` : ""}${renderAttachments({ lesson_id: lesson.id })}</article>`).join("")}</div>`;
   }
 
   function renderTeacherHomeworkExercises(homeworkRecipient) {
@@ -1974,6 +2045,26 @@
   function teacherStudents() {
     const ids = state.data.teacherStudents.filter((relation) => relation.teacher_id === state.session.user.id).map((relation) => relation.student_id);
     return ids.map((id) => state.data.profiles.find((profile) => profile.id === id)).filter(Boolean);
+  }
+
+  function transferredArchiveAccesses() {
+    return state.data.teacherTransfers.filter((transfer) => transfer.new_teacher_id === state.session.user.id && transfer.archive_access);
+  }
+
+  function canReadTransferredArchive(studentId, previousTeacherId) {
+    return transferredArchiveAccesses().some((transfer) => transfer.student_id === studentId && transfer.previous_teacher_id === previousTeacherId);
+  }
+
+  function transferredArchiveLessons() {
+    return state.data.lessons.filter((lesson) => lesson.teacher_id !== state.session.user.id && lessonStudents(lesson.id).some((student) => canReadTransferredArchive(student.student_id, lesson.teacher_id)));
+  }
+
+  function transferredArchiveHomework() {
+    return state.data.homework.filter((task) => task.teacher_id !== state.session.user.id && homeworkStudents(task.id).some((student) => canReadTransferredArchive(student.student_id, task.teacher_id)));
+  }
+
+  function transferredArchiveRecipients(task) {
+    return homeworkStudents(task.id).filter((student) => canReadTransferredArchive(student.student_id, task.teacher_id));
   }
 
   function canManageStudentCard(studentId) {
@@ -2621,6 +2712,10 @@
     if (text.includes("Matching pairs need") || text.includes("Matching pair needs")) return "Для вправи з парами додай щонайменше дві повні унікальні пари.";
     if (text.includes("Homework has no recipients")) return "У цього домашнього завдання немає учнів, тому вправу не можна додати.";
     if (text.includes("A secure Wordwall link is required")) return "Додай коректне посилання https://wordwall.net/...";
+    if (text.includes("replace_student_teacher") || text.includes("teacher_student_transfers")) return "Функція заміни викладача ще не підключена. Виконай supabase/add_teacher_transfer.sql у Supabase SQL Editor.";
+    if (text.includes("Selected teacher is not currently assigned")) return "Обраний поточний викладач уже не прив’язаний до цього учня. Онови сторінку та спробуй ще раз.";
+    if (text.includes("Choose a different new teacher")) return "Для заміни обери іншого викладача.";
+    if (text.includes("New teacher needs an active teacher role")) return "Новий користувач має мати активну роль викладача.";
     if (text.includes("Exercise template access denied") || text.includes("Exercise access denied")) return "Немає доступу до цієї вправи.";
     if (text.includes("Exercise group access denied")) return "Ця група вправ недоступна. Онови сторінку та вибери групу ще раз.";
     if (text.includes("exercise_groups_school_id_teacher_id_name_key")) return "Група з такою назвою вже є у твоїй бібліотеці.";

@@ -1538,10 +1538,15 @@ textarea:focus {
   line-height: 1.55;
 }
 
-.two-fields {
+.two-fields,
+.three-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.three-fields {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 select[multiple] {
@@ -1979,6 +1984,7 @@ body.is-loading {
 
   .metric-grid,
   .two-fields,
+  .three-fields,
   .student-stats-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
