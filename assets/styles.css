@@ -1553,11 +1553,28 @@ select[multiple] {
   min-height: 120px;
 }
 
-.relation-list .item {
+.relation-summary,
+.relation-editor-actions {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.relation-summary .item-actions {
+  margin-left: auto;
+}
+
+.relation-editor {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+
+.relation-editor .field {
+  max-width: 360px;
 }
 
 .chip-row {

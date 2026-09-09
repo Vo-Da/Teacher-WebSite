@@ -21,6 +21,7 @@
     homeworkFilters: { studentStatus: "all", teacherStatus: "all", teacherStudentId: "all" },
     exerciseGroupsAvailable: true,
     teacherTransfersAvailable: true,
+    editingTeacherStudentId: null,
     recording: null,
     showPasswordRecoveryRequest: false,
     passwordRecovery: new URLSearchParams(window.location.search).has("password-recovery"),
@@ -100,6 +101,7 @@
     state.data = emptyData();
     state.exerciseGroupsAvailable = true;
     state.teacherTransfersAvailable = true;
+    state.editingTeacherStudentId = null;
     state.selectedLessonId = null;
     state.selectedHomeworkId = null;
     state.selectedStudentId = null;
@@ -527,6 +529,21 @@
         await refreshContext();
         return;
       }
+      if (action === "edit-assignment") {
+        if (!state.teacherTransfersAvailable) {
+          state.notice = failure("Функція заміни викладача ще не підключена. Виконай SQL-оновлення у Supabase.");
+          renderDashboard();
+          return;
+        }
+        state.editingTeacherStudentId = target.dataset.relationId || null;
+        renderDashboard();
+        return;
+      }
+      if (action === "cancel-edit-assignment") {
+        state.editingTeacherStudentId = null;
+        renderDashboard();
+        return;
+      }
       if (action === "delete-lesson") {
         if (!confirm("Видалити це заняття?")) return;
         const { error } = await state.client.from("lessons").delete().eq("id", target.dataset.lessonId);
@@ -738,10 +755,15 @@
   }
 
   async function assignTeacherStudent(form) {
+    const teacherId = value(form, "teacherId");
+    const studentId = value(form, "studentId");
+    if (state.data.teacherStudents.some((relation) => relation.teacher_id === teacherId && relation.student_id === studentId)) {
+      throw new Error("Teacher is already assigned to this student");
+    }
     const { error } = await state.client.from("teacher_students").upsert({
       school_id: state.school.id,
-      teacher_id: value(form, "teacherId"),
-      student_id: value(form, "studentId"),
+      teacher_id: teacherId,
+      student_id: studentId,
       is_active: true
     }, { onConflict: "school_id,teacher_id,student_id" });
     if (error) throw error;
@@ -750,10 +772,14 @@
   }
 
   async function replaceTeacher(form) {
+    const relationId = value(form, "relationId");
     const previousTeacherId = value(form, "previousTeacherId");
     const newTeacherId = value(form, "newTeacherId");
     const studentId = value(form, "studentId");
     const shareArchive = value(form, "shareArchive") === "true";
+    const relationExists = state.data.teacherStudents.some((relation) => relation.id === relationId && relation.teacher_id === previousTeacherId && relation.student_id === studentId);
+    if (!relationExists) throw new Error("Selected teacher is not currently assigned to this student");
+    if (previousTeacherId === newTeacherId) throw new Error("Choose a different new teacher");
     const previousTeacher = nameOf(previousTeacherId);
     const newTeacher = nameOf(newTeacherId);
     const student = nameOf(studentId);
@@ -1133,23 +1159,15 @@
           </form>
         </div>
       </div>
-      <div class="card"><h2>Замінити викладача</h2><p class="muted">Для передачі учня іншому викладачу. Старі уроки й фінанси не переписуються.</p>
-        ${state.teacherTransfersAvailable ? `<form id="replaceTeacherForm" class="stack">
-          <div class="three-fields">
-            ${selectField("previousTeacherId", "Поточний викладач", teachers, true, "Обери викладача")}
-            ${selectField("studentId", "Учень", students, true, "Обери учня")}
-            ${selectField("newTeacherId", "Новий викладач", teachers, true, "Обери викладача")}
-          </div>
-          <label class="role-option"><input name="shareArchive" type="checkbox" value="true" /><span><strong>Передати навчальний архів</strong><small>Новий викладач зможе переглядати завершені уроки, опубліковані домашні, відповіді та файли цього учня. Доступ лише для читання; фінанси не передаються.</small></span></label>
-          <div class="meta">Картка учня та внутрішні нотатки доступні новому викладачу після прив’язки завжди.</div>
-          <button class="btn primary" type="submit">Замінити викладача</button>
-        </form>` : '<div class="msg error">Для заміни викладача потрібно виконати SQL-оновлення з файлу supabase/add_teacher_transfer.sql у Supabase.</div>'}
-      </div>
       <div class="work-grid">
         <div class="card"><h2>Створити акаунт</h2><p class="muted">Новий користувач отримає активний доступ одразу. Для однієї людини можна вибрати кілька ролей.</p><form id="adminCreateUserForm" class="stack"><div class="field"><label>Ім’я та прізвище</label><input name="fullName" required /></div><div class="field"><label>Email</label><input name="email" type="email" required /></div><div class="field"><label>Тимчасовий пароль</label><input name="password" type="password" minlength="8" required /></div><div class="field"><label>Ролі</label>${roleCheckboxes(["student"])}</div><button class="btn primary" type="submit">Створити акаунт</button></form></div>
         <div class="card"><h2>Доступи</h2><p class="muted">Призупинення зберігає історію. Видалення після підтвердження прибирає акаунт і пов’язані дані назавжди.</p><div class="list">${state.data.memberships.filter((member) => member.status === "suspended").map((member) => `<div class="item"><div><p class="item-title">${escape(nameOf(member.user_id))}</p><div class="meta">${escape(roleTitles(membershipRoles(member)).join(", "))} · доступ призупинено</div></div><button class="btn small secondary" type="button" data-action="activate-user" data-user-id="${member.user_id}">Відновити</button></div>`).join("") || empty("Призупинених акаунтів немає.")}</div></div>
       </div>
-      <div class="card"><h2>Активні зв’язки</h2><div class="relation-list">${state.data.teacherStudents.map((relation) => `<div class="item"><strong>${escape(nameOf(relation.teacher_id))}</strong><span>викладає</span><strong>${escape(nameOf(relation.student_id))}</strong><button class="btn small secondary" type="button" data-action="remove-assignment" data-relation-id="${relation.id}">Прибрати</button></div>`).join("") || empty("Ще немає призначень.")}</div></div>
+      <div class="card"><h2>Активні зв’язки</h2><p class="muted">Тут можна змінити викладача для конкретного учня.</p><div class="relation-list">${state.data.teacherStudents.map((relation) => {
+        const replacementTeachers = teachers.filter((teacher) => teacher.user_id !== relation.teacher_id);
+        const isEditing = state.editingTeacherStudentId === relation.id;
+        return `<div class="item relation-item"><div class="relation-summary"><strong>${escape(nameOf(relation.teacher_id))}</strong><span>викладає</span><strong>${escape(nameOf(relation.student_id))}</strong><div class="item-actions"><button class="btn small secondary" type="button" data-action="edit-assignment" data-relation-id="${relation.id}">Змінити</button><button class="btn small secondary" type="button" data-action="remove-assignment" data-relation-id="${relation.id}">Прибрати</button></div></div>${isEditing ? `<form id="replaceTeacherForm" class="relation-editor"><input type="hidden" name="relationId" value="${escapeAttr(relation.id)}" /><input type="hidden" name="previousTeacherId" value="${escapeAttr(relation.teacher_id)}" /><input type="hidden" name="studentId" value="${escapeAttr(relation.student_id)}" /><div class="field"><label>Новий викладач</label><select name="newTeacherId" required><option value="" selected hidden>Обери викладача</option>${replacementTeachers.map((teacher) => `<option value="${escapeAttr(teacher.user_id)}">${escape(nameOf(teacher.user_id))}</option>`).join("")}</select></div><label class="role-option"><input name="shareArchive" type="checkbox" value="true" /><span><strong>Передати навчальний архів</strong><small>Новий викладач переглядатиме завершені уроки, опубліковані домашні, відповіді, нотатки й файли цього учня. Доступ лише для читання; фінанси не передаються.</small></span></label><div class="meta">Картка учня та внутрішні нотатки доступні новому викладачу після прив’язки завжди. Заплановані заняття не переносяться.</div><div class="relation-editor-actions"><button class="btn primary" type="submit" ${replacementTeachers.length ? "" : "disabled"}>Зберегти зміну</button><button class="btn secondary" type="button" data-action="cancel-edit-assignment">Скасувати</button></div>${replacementTeachers.length ? "" : '<div class="msg error">Немає іншого активного викладача, якого можна призначити.</div>'}</form>` : ""}</div>`;
+      }).join("") || empty("Ще немає призначень.")}</div></div>
       <div class="work-grid"><div class="card"><h2>Викладачі</h2>${renderPeopleList(teachers)}</div><div class="card"><h2>Учні</h2>${renderPeopleList(students)}</div></div>
       ${state.selectedStudentId ? renderStudentInternalCard(state.selectedStudentId) : ""}
     `;
@@ -2713,6 +2731,7 @@
     if (text.includes("Homework has no recipients")) return "У цього домашнього завдання немає учнів, тому вправу не можна додати.";
     if (text.includes("A secure Wordwall link is required")) return "Додай коректне посилання https://wordwall.net/...";
     if (text.includes("replace_student_teacher") || text.includes("teacher_student_transfers")) return "Функція заміни викладача ще не підключена. Виконай supabase/add_teacher_transfer.sql у Supabase SQL Editor.";
+    if (text.includes("Teacher is already assigned to this student")) return "Цей викладач уже активний для обраного учня.";
     if (text.includes("Selected teacher is not currently assigned")) return "Обраний поточний викладач уже не прив’язаний до цього учня. Онови сторінку та спробуй ще раз.";
     if (text.includes("Choose a different new teacher")) return "Для заміни обери іншого викладача.";
     if (text.includes("New teacher needs an active teacher role")) return "Новий користувач має мати активну роль викладача.";
