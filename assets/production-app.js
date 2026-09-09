@@ -1386,7 +1386,7 @@
     return `
       <div class="lesson-homework"><strong>Домашні до уроку</strong>
         <div class="list">${tasks.map((task) => `<button class="lesson-card linked-homework-card ${selectedTask?.id === task.id ? "active" : ""}" type="button" data-action="select-homework" data-homework-id="${task.id}" aria-expanded="${selectedTask?.id === task.id}"><div class="lesson-card-head"><strong>Домашнє завдання</strong><span class="meta">${escape(formatDateTime(task.created_at))}</span></div><div class="meta">${task.deadline_at ? "Дедлайн: " + escape(formatDateTime(task.deadline_at)) : "Без дедлайну"}</div></button>`).join("")}</div>
-        ${selectedTask ? `<div class="filebox homework-preview"><div class="item-head"><strong>Домашнє завдання</strong><span class="meta">Опубліковано</span></div><div class="homework-text"><strong>Текст</strong><p>${escape(selectedTask.description || "Текст не додано.")}</p></div>${selectedTask.deadline_at ? `<div class="meta">Дедлайн: ${escape(formatDateTime(selectedTask.deadline_at))}</div>` : ""}${renderAttachments({ homework_id: selectedTask.id })}</div>` : ""}
+        ${selectedTask ? `<div class="filebox homework-preview"><div class="item-head"><strong>Домашнє завдання</strong><span class="meta">Опубліковано</span></div>${selectedTask.description?.trim() ? `<div class="homework-text"><strong>Текст</strong><p>${escape(selectedTask.description)}</p></div>` : ""}${selectedTask.deadline_at ? `<div class="meta">Дедлайн: ${escape(formatDateTime(selectedTask.deadline_at))}</div>` : ""}${renderAttachments({ homework_id: selectedTask.id })}</div>` : ""}
       </div>
     `;
   }
@@ -1520,7 +1520,7 @@
     return `
       <article class="card homework-card">
         <div class="item-head"><div><p class="eyebrow">${task.deadline_at ? "Дедлайн: " + escape(formatDateTime(task.deadline_at)) : "Без дедлайну"}</p><h2>Домашнє завдання</h2></div>${submissionBadge(recipient.status)}</div>
-        <div class="homework-text"><strong>Текст</strong><p>${escape(task.description || "Текст не додано.")}</p></div>
+        ${task.description?.trim() ? `<div class="homework-text"><strong>Текст</strong><p>${escape(task.description)}</p></div>` : ""}
         ${renderAttachments({ homework_id: task.id })}
         ${renderHomeworkExercises(recipient)}
         ${recipient.teacher_comment ? `<div class="feedback-box"><strong>Коментар викладача</strong><div>${escape(recipient.teacher_comment)}</div>${recipient.grade ? `<div>Оцінка: ${escape(recipient.grade)}</div>` : ""}${renderAttachments({ homework_student_id: recipient.id })}</div>` : ""}
