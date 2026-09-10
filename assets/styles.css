@@ -1957,7 +1957,7 @@ select[multiple] {
   display: block;
   background: url("./running-horse-sprite.png") 0 0 / 400% 100% no-repeat;
   filter: drop-shadow(0 8px 10px rgba(4, 24, 34, 0.28));
-  animation: horse-gallop 0.48s linear infinite;
+  animation: horse-gallop 0.64s linear infinite, horse-bounce 0.64s ease-in-out infinite;
 }
 
 @keyframes horse-gallop {
@@ -1965,6 +1965,13 @@ select[multiple] {
   25%, 49.99% { background-position: 33.333% 0; }
   50%, 74.99% { background-position: 66.667% 0; }
   75%, 100% { background-position: 100% 0; }
+}
+
+@keyframes horse-bounce {
+  0%, 100% { transform: translateY(1px); }
+  25% { transform: translateY(-1px); }
+  50% { transform: translateY(-3px); }
+  75% { transform: translateY(0); }
 }
 
 @media (prefers-reduced-motion: reduce) {
