@@ -1952,8 +1952,8 @@ select[multiple] {
 }
 
 .loading-horse {
-  width: 96px;
-  height: 128px;
+  width: 72px;
+  height: 96px;
   display: block;
   background: url("./running-horse-sprite.png") 0 0 / 400% 100% no-repeat;
   filter: drop-shadow(0 8px 10px rgba(4, 24, 34, 0.28));
