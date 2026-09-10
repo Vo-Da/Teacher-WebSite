@@ -1565,7 +1565,8 @@ select[multiple] {
   margin-left: auto;
 }
 
-.relation-editor {
+.relation-editor,
+.user-editor {
   display: grid;
   gap: 10px;
   margin-top: 12px;
@@ -1575,6 +1576,10 @@ select[multiple] {
 
 .relation-editor .field {
   max-width: 360px;
+}
+
+.user-editor .two-fields {
+  max-width: 760px;
 }
 
 .chip-row {

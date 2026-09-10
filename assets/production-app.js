@@ -22,6 +22,7 @@
     exerciseGroupsAvailable: true,
     teacherTransfersAvailable: true,
     editingTeacherStudentId: null,
+    editingUser: null,
     recording: null,
     showPasswordRecoveryRequest: false,
     passwordRecovery: new URLSearchParams(window.location.search).has("password-recovery"),
@@ -102,6 +103,7 @@
     state.exerciseGroupsAvailable = true;
     state.teacherTransfersAvailable = true;
     state.editingTeacherStudentId = null;
+    state.editingUser = null;
     state.selectedLessonId = null;
     state.selectedHomeworkId = null;
     state.selectedStudentId = null;
@@ -498,6 +500,27 @@
         await refreshContext();
         return;
       }
+      if (action === "edit-user") {
+        const userId = target.dataset.userId || "";
+        if (!userId) return;
+        state.editingUser = { id: userId, section: target.dataset.userSection || "", email: "", loading: true };
+        renderDashboard();
+        try {
+          const account = await readAdminUser(userId);
+          if (state.editingUser?.id !== userId) return;
+          state.editingUser = { ...state.editingUser, email: account.email || "", loading: false };
+          renderDashboard();
+        } catch (error) {
+          state.editingUser = null;
+          throw error;
+        }
+        return;
+      }
+      if (action === "cancel-edit-user") {
+        state.editingUser = null;
+        renderDashboard();
+        return;
+      }
       if (action === "suspend-user" || action === "activate-user") {
         await manageAdminUser({ action: action === "suspend-user" ? "suspend" : "activate", userId: target.dataset.userId });
         return;
@@ -635,7 +658,7 @@
       if (form.id === "submitExerciseForm") await submitExercise(form);
       if (form.id === "studentInternalCardForm") await saveStudentInternalCard(form);
       if (form.id === "adminCreateUserForm") await createAdminUser(form);
-      if (form.id === "changeUserRolesForm") await changeUserRoles(form);
+      if (form.id === "updateAdminUserForm") await updateAdminUser(form);
     } catch (error) {
       state.notice = failure(friendlyError(error));
       renderCurrent();
@@ -1049,13 +1072,19 @@
     });
   }
 
-  async function changeUserRoles(form) {
+  async function updateAdminUser(form) {
     const roles = values(form, "roles");
     if (!roles.length) throw new Error("У користувача має залишитися хоча б одна роль.");
-    await manageAdminUser({ action: "set_roles", userId: value(form, "userId"), roles });
+    await manageAdminUser({
+      action: "update_account",
+      userId: value(form, "userId"),
+      fullName: value(form, "fullName"),
+      email: value(form, "email"),
+      roles
+    });
   }
 
-  async function manageAdminUser(payload) {
+  async function callAdminUsers(payload) {
     const { data, error } = await state.client.functions.invoke("admin-users", {
       body: { ...payload, schoolId: state.school.id }
     });
@@ -1072,6 +1101,19 @@
       throw error;
     }
     if (data?.error) throw new Error(data.error);
+    return data || {};
+  }
+
+  async function readAdminUser(userId) {
+    return callAdminUsers({ action: "get_account", userId });
+  }
+
+  async function manageAdminUser(payload) {
+    const data = await callAdminUsers(payload);
+    if (payload.action === "update_account" && payload.userId === state.session.user.id) {
+      const { error } = await state.client.auth.refreshSession();
+      if (error) throw error;
+    }
     state.notice = success(data?.message || "Зміни доступу збережено.");
     await refreshContext();
   }
@@ -1168,7 +1210,7 @@
         const isEditing = state.editingTeacherStudentId === relation.id;
         return `<div class="item relation-item"><div class="relation-summary"><strong>${escape(nameOf(relation.teacher_id))}</strong><span>викладає</span><strong>${escape(nameOf(relation.student_id))}</strong><div class="item-actions"><button class="btn small secondary" type="button" data-action="edit-assignment" data-relation-id="${relation.id}">Змінити</button><button class="btn small secondary" type="button" data-action="remove-assignment" data-relation-id="${relation.id}">Прибрати</button></div></div>${isEditing ? `<form id="replaceTeacherForm" class="relation-editor"><input type="hidden" name="relationId" value="${escapeAttr(relation.id)}" /><input type="hidden" name="previousTeacherId" value="${escapeAttr(relation.teacher_id)}" /><input type="hidden" name="studentId" value="${escapeAttr(relation.student_id)}" /><div class="field"><label>Новий викладач</label><select name="newTeacherId" required><option value="" selected hidden>Обери викладача</option>${replacementTeachers.map((teacher) => `<option value="${escapeAttr(teacher.user_id)}">${escape(nameOf(teacher.user_id))}</option>`).join("")}</select></div><label class="role-option"><input name="shareArchive" type="checkbox" value="true" /><span><strong>Передати навчальний архів</strong><small>Новий викладач переглядатиме завершені уроки, опубліковані домашні, відповіді, нотатки й файли цього учня. Доступ лише для читання; фінанси не передаються.</small></span></label><div class="meta">Картка учня та внутрішні нотатки доступні новому викладачу після прив’язки завжди. Заплановані заняття не переносяться.</div><div class="relation-editor-actions"><button class="btn primary" type="submit" ${replacementTeachers.length ? "" : "disabled"}>Зберегти зміну</button><button class="btn secondary" type="button" data-action="cancel-edit-assignment">Скасувати</button></div>${replacementTeachers.length ? "" : '<div class="msg error">Немає іншого активного викладача, якого можна призначити.</div>'}</form>` : ""}</div>`;
       }).join("") || empty("Ще немає призначень.")}</div></div>
-      <div class="work-grid"><div class="card"><h2>Викладачі</h2>${renderPeopleList(teachers)}</div><div class="card"><h2>Учні</h2>${renderPeopleList(students)}</div></div>
+      <div class="work-grid"><div class="card"><h2>Викладачі</h2>${renderPeopleList(teachers, "teachers")}</div><div class="card"><h2>Учні</h2>${renderPeopleList(students, "students")}</div></div>
       ${state.selectedStudentId ? renderStudentInternalCard(state.selectedStudentId) : ""}
     `;
   }
@@ -2463,11 +2505,15 @@
     return `<div class="field"><label>${escape(label)}</label><select name="${escapeAttr(name)}" ${required ? "required" : ""}>${emptyOption}${options}</select></div>`;
   }
 
-  function renderPeopleList(members) {
+  function renderPeopleList(members, section) {
     return `<div class="list">${members.map((member) => {
       const isSelf = member.user_id === state.session.user.id;
       const roles = membershipRoles(member);
-      return `<div class="item"><div class="item-head"><div><p class="item-title">${escape(nameOf(member.user_id))}</p><div class="meta">${escape(isSelf ? "Цей акаунт" : "Активний доступ")}</div></div><div class="role-badges">${roleBadges(roles)}</div></div><form id="changeUserRolesForm" class="inline-form"><input type="hidden" name="userId" value="${member.user_id}" />${roleCheckboxes(roles)}<button class="btn small secondary" type="submit">Зберегти ролі</button>${roles.includes("student") ? `<button class="btn small secondary" type="button" data-action="open-student-card" data-student-id="${member.user_id}">Картка учня</button>` : ""}${isSelf ? "" : `<button class="btn small secondary" type="button" data-action="suspend-user" data-user-id="${member.user_id}">Призупинити</button><button class="btn small danger" type="button" data-action="delete-user" data-user-id="${member.user_id}" data-user-name="${escapeAttr(nameOf(member.user_id))}">Видалити</button>`}</form></div>`;
+      const editing = state.editingUser?.id === member.user_id && state.editingUser?.section === section;
+      const accountForm = state.editingUser?.loading
+        ? '<div class="user-editor"><div class="meta">Завантажуємо дані акаунта...</div></div>'
+        : `<form id="updateAdminUserForm" class="user-editor"><input type="hidden" name="userId" value="${escapeAttr(member.user_id)}" /><div class="two-fields"><div class="field"><label>Ім’я та прізвище</label><input name="fullName" value="${escapeAttr(nameOf(member.user_id))}" required maxlength="120" /></div><div class="field"><label>Email</label><input name="email" type="email" value="${escapeAttr(state.editingUser?.email || "")}" required /></div></div><div class="field"><label>Ролі</label>${roleCheckboxes(roles)}</div><div class="meta">Пароль не відображається і не змінюється з цього екрана.</div><div class="relation-editor-actions"><button class="btn small primary" type="submit">Зберегти зміни</button><button class="btn small secondary" type="button" data-action="cancel-edit-user">Скасувати</button></div></form>`;
+      return `<div class="item"><div class="item-head"><div><p class="item-title">${escape(nameOf(member.user_id))}</p><div class="meta">${escape(isSelf ? "Цей акаунт" : "Активний доступ")}</div></div><div class="role-badges">${roleBadges(roles)}</div></div><div class="item-actions"><button class="btn small secondary" type="button" data-action="edit-user" data-user-id="${member.user_id}" data-user-section="${escapeAttr(section)}">Редагувати</button>${roles.includes("student") ? `<button class="btn small secondary" type="button" data-action="open-student-card" data-student-id="${member.user_id}">Картка учня</button>` : ""}${isSelf ? "" : `<button class="btn small secondary" type="button" data-action="suspend-user" data-user-id="${member.user_id}">Призупинити</button><button class="btn small danger" type="button" data-action="delete-user" data-user-id="${member.user_id}" data-user-name="${escapeAttr(nameOf(member.user_id))}">Видалити</button>`}</div>${editing ? accountForm : ""}</div>`;
     }).join("") || empty("Поки немає активних користувачів.")}</div>`;
   }
 
@@ -2745,7 +2791,9 @@
     if (text.includes("Access denied")) return "Недостатньо прав для цієї дії.";
     if (text.includes("Email not confirmed")) return "Підтверди email, а потім увійди в кабінет.";
     if (text.includes("Administrator access required")) return "Для цієї дії потрібен активний доступ адміністратора.";
+    if (text.includes("Invalid account update data")) return "Перевір ім’я, email і вибрані ролі.";
     if (text.includes("Invalid account data")) return "Перевір ім’я, email і пароль нового користувача.";
+    if (text.includes("User already registered") || text.includes("email address is already in use")) return "Цей email уже використовується іншим акаунтом.";
     if (text.includes("Password must contain")) return "Пароль має містити щонайменше 8 символів.";
     if (text.includes("Account has learning or financial history")) return "Цей акаунт уже має історію занять, матеріалів або оплат. Замість видалення призупини доступ, щоб зберегти дані.";
     if (text.includes("cannot delete their own account")) return "Власний акаунт не можна видалити з цього екрана.";
@@ -2753,6 +2801,7 @@
     if (text.includes("Account owns another school")) return "Цей акаунт є власником іншої школи. Спершу передай там права власника.";
     if (text.includes("Select at least one role")) return "Вибери хоча б одну роль для користувача.";
     if (text.includes("At least one active administrator must remain")) return "У школі має залишитися щонайменше один активний адміністратор.";
+    if (text.includes("Unknown action")) return "Редагування акаунтів ще не підключено у Supabase. Онови функцію admin-users кодом із цього проєкту.";
     if (text.includes("Failed to send a request to the Edge Function")) return "Сервіс створення акаунтів ще не підключено. У Supabase відкрий Edge Functions, створи або задеплой функцію з назвою admin-users і повтори спробу.";
     return text;
   }
