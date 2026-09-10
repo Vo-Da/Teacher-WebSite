@@ -219,12 +219,15 @@ Dashboard дозволяє створити та задеплоїти Edge Funct
 ## Умови, прогрес і Google Calendar
 
 Для вже налаштованого проєкту виконай у **SQL Editor → New query** весь файл
-[`supabase/add_learning_progress_terms_and_google_calendar.sql`](./supabase/add_learning_progress_terms_and_google_calendar.sql).
+[`supabase/add_learning_progress_terms_and_google_calendar.sql`](./supabase/add_learning_progress_terms_and_google_calendar.sql),
+а після нього файл
+[`supabase/refine_shared_topic_progress.sql`](./supabase/refine_shared_topic_progress.sql).
 Він додає:
 
 1. Безпечне редагування вправ через нові версії: старі домашні та відповіді не змінюються.
 2. Умови для учнів з версіями та одноразовим підтвердженням ознайомлення.
-3. Приватний прогрес тем для кожного учня, який ведуть викладачі та адміністратори.
+3. Єдину ієрархію тем для всієї школи, яку створює адміністратор; викладачі лише
+   відмічають прогрес конкретного учня.
 4. Службові таблиці для добровільної синхронізації з Google Calendar.
 
 ### Підключити Google Calendar

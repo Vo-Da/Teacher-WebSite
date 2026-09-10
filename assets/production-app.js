@@ -22,13 +22,14 @@
     exerciseGroupsAvailable: true,
     teacherTransfersAvailable: true,
     studentConditionsAvailable: true,
-    studentTopicsAvailable: true,
+    sharedTopicsAvailable: true,
     googleCalendar: { available: true, connected: false, calendarName: "" },
     editingTeacherStudentId: null,
     editingExerciseTemplateId: null,
     exerciseDraft: null,
     editingUser: null,
     topicProgressStudentId: null,
+    curriculumTopicsOpen: false,
     recording: null,
     showPasswordRecoveryRequest: false,
     passwordRecovery: new URLSearchParams(window.location.search).has("password-recovery"),
@@ -68,7 +69,8 @@
       studentInternalNotes: [],
       schoolStudentConditions: [],
       conditionAcknowledgements: [],
-      studentTopicNodes: [],
+      schoolTopicNodes: [],
+      studentTopicProgress: [],
       exerciseTemplateAnswers: [],
       ledger: []
     };
@@ -114,7 +116,7 @@
     state.exerciseGroupsAvailable = true;
     state.teacherTransfersAvailable = true;
     state.studentConditionsAvailable = true;
-    state.studentTopicsAvailable = true;
+    state.sharedTopicsAvailable = true;
     state.googleCalendar = { available: true, connected: false, calendarName: "" };
     state.editingTeacherStudentId = null;
     state.editingUser = null;
@@ -194,7 +196,7 @@
     const schoolId = state.membership.school_id;
     const canAdminister = hasRole("admin");
     const canManageStudentContext = state.activeRole === "admin" || state.activeRole === "teacher";
-    const [subjects, relations, lessons, homework, profiles, memberships, studentInternalProfiles, studentInternalNotes, exerciseGroups, exerciseTemplates, exerciseAssignments, teacherTransfers, schoolStudentConditions, conditionAcknowledgements, studentTopicNodes] = await Promise.all([
+    const [subjects, relations, lessons, homework, profiles, memberships, studentInternalProfiles, studentInternalNotes, exerciseGroups, exerciseTemplates, exerciseAssignments, teacherTransfers, schoolStudentConditions, conditionAcknowledgements, schoolTopicNodes, studentTopicProgress] = await Promise.all([
       selectRows("subjects", (q) => q.eq("school_id", schoolId).order("name")),
       selectRows("teacher_students", (q) => q.eq("school_id", schoolId).eq("is_active", true)),
       selectRows("lessons", (q) => q.eq("school_id", schoolId).order("starts_at")),
@@ -210,7 +212,10 @@
       selectOptionalRows("school_student_conditions", (q) => q.eq("school_id", schoolId), "studentConditionsAvailable"),
       selectOptionalRows("student_condition_acknowledgements", (q) => q.eq("school_id", schoolId), "studentConditionsAvailable"),
       canManageStudentContext
-        ? selectOptionalRows("student_topic_nodes", (q) => q.eq("school_id", schoolId).order("sort_order").order("created_at"), "studentTopicsAvailable")
+        ? selectOptionalRows("school_topic_nodes", (q) => q.eq("school_id", schoolId).order("sort_order").order("created_at"), "sharedTopicsAvailable")
+        : Promise.resolve([]),
+      canManageStudentContext
+        ? selectOptionalRows("student_topic_progress", (q) => q.eq("school_id", schoolId).order("updated_at", { ascending: false }), "sharedTopicsAvailable")
         : Promise.resolve([])
     ]);
 
@@ -228,7 +233,8 @@
     state.data.teacherTransfers = teacherTransfers;
     state.data.schoolStudentConditions = schoolStudentConditions;
     state.data.conditionAcknowledgements = conditionAcknowledgements;
-    state.data.studentTopicNodes = studentTopicNodes;
+    state.data.schoolTopicNodes = schoolTopicNodes;
+    state.data.studentTopicProgress = studentTopicProgress;
 
     const lessonIds = lessons.map((item) => item.id);
     const homeworkIds = homework.map((item) => item.id);
@@ -402,7 +408,7 @@
   }
 
   function shell(content) {
-    return `<main class="production-app">${content}<div class="loading-overlay${state.loading ? " is-visible" : ""}" data-loading-overlay aria-live="polite" aria-hidden="${state.loading ? "false" : "true"}"><span class="loading-spinner" aria-hidden="true"></span><span>Завантажуємо...</span></div></main>`;
+    return `<main class="production-app">${content}<div class="loading-overlay${state.loading ? " is-visible" : ""}" data-loading-overlay aria-live="polite" aria-hidden="${state.loading ? "false" : "true"}"><img class="loading-horse" src="./assets/academy-crest.png" alt="" /><span>Завантажуємо...</span></div></main>`;
   }
 
   async function handleClick(event) {
@@ -411,10 +417,10 @@
     const action = target.dataset.action;
     const remoteActions = new Set([
       "acknowledge-student-conditions", "approve-request", "delete-exercise-group",
-      "delete-lesson", "delete-student-topic", "delete-user", "disconnect-google-calendar",
+      "delete-lesson", "delete-school-topic", "delete-user", "disconnect-google-calendar",
       "download-file", "edit-user", "mark-homework-reviewed", "remove-assignment",
-      "rename-student-topic", "review-wordwall-exercise", "suspend-user", "activate-user",
-      "sync-google-calendar", "toggle-student-topic"
+      "rename-school-topic", "review-wordwall-exercise", "suspend-user", "activate-user",
+      "sync-google-calendar"
     ]);
     const showLoading = remoteActions.has(action);
     if (showLoading) setLoading(true);
@@ -523,20 +529,26 @@
         renderDashboard();
         return;
       }
-      if (action === "toggle-student-topic") {
-        await setStudentTopicCompleted(target.dataset.topicId, target.checked === true);
+      if (action === "open-school-curriculum") {
+        state.curriculumTopicsOpen = true;
+        renderDashboard();
         return;
       }
-      if (action === "rename-student-topic") {
+      if (action === "close-school-curriculum") {
+        state.curriculumTopicsOpen = false;
+        renderDashboard();
+        return;
+      }
+      if (action === "rename-school-topic") {
         const currentTitle = target.dataset.topicTitle || "";
         const nextTitle = prompt("Нова назва теми", currentTitle);
         if (nextTitle === null || nextTitle.trim() === currentTitle.trim()) return;
-        await renameStudentTopic(target.dataset.topicId, nextTitle);
+        await renameSchoolTopic(target.dataset.topicId, nextTitle);
         return;
       }
-      if (action === "delete-student-topic") {
+      if (action === "delete-school-topic") {
         if (!confirm("Видалити цю тему та всі її підтеми?")) return;
-        await deleteStudentTopic(target.dataset.topicId);
+        await deleteSchoolTopic(target.dataset.topicId);
         return;
       }
       if (action === "edit-exercise-template") {
@@ -696,8 +708,8 @@
       updateMultipleSelectAnswer(input.closest("[data-multiple-select-question]"));
       return;
     }
-    if (input.matches?.("[data-student-topic-checkbox]")) {
-      void setStudentTopicCompleted(input.dataset.topicId, input.checked).catch((error) => {
+    if (input.matches?.("[data-student-topic-progress]")) {
+      void setStudentTopicProgress(input.dataset.studentId, input.dataset.topicId, input.checked).catch((error) => {
         state.notice = failure(friendlyError(error));
         renderCurrent();
       });
@@ -767,7 +779,7 @@
       if (form.id === "submitExerciseForm") await submitExercise(form);
       if (form.id === "studentInternalCardForm") await saveStudentInternalCard(form);
       if (form.id === "studentConditionsForm") await saveStudentConditions(form);
-      if (form.id === "createStudentTopicForm") await createStudentTopic(form);
+      if (form.id === "createSchoolTopicForm") await createSchoolTopic(form);
       if (form.id === "adminCreateUserForm") await createAdminUser(form);
       if (form.id === "updateAdminUserForm") await updateAdminUser(form);
     } catch (error) {
@@ -1252,25 +1264,25 @@
     await refreshContext();
   }
 
-  async function createStudentTopic(form) {
-    const studentId = value(form, "studentId");
-    const { error } = await state.client.rpc("create_student_topic_node", {
+  async function createSchoolTopic(form) {
+    const { error } = await state.client.rpc("create_school_topic_node", {
       p_school_id: state.school.id,
-      p_student_id: studentId,
       p_title: value(form, "title"),
       p_parent_id: value(form, "parentId") || null
     });
     if (error) throw error;
-    state.notice = success("Тему додано до прогресу учня.");
+    state.notice = success("Тему додано до спільної навчальної програми.");
     await refreshContext();
   }
 
-  async function setStudentTopicCompleted(topicId, isCompleted) {
+  async function setStudentTopicProgress(studentId, topicId, isCompleted) {
     setLoading(true);
     try {
-      const { error } = await state.client.rpc("set_student_topic_completed", {
+      const { error } = await state.client.rpc("set_student_topic_progress", {
+        p_school_id: state.school.id,
+        p_student_id: studentId,
         p_topic_id: topicId,
-        p_is_completed: isCompleted
+        p_is_completed: isCompleted === true
       });
       if (error) throw error;
       await refreshContext();
@@ -1279,8 +1291,8 @@
     }
   }
 
-  async function renameStudentTopic(topicId, title) {
-    const { error } = await state.client.rpc("rename_student_topic_node", {
+  async function renameSchoolTopic(topicId, title) {
+    const { error } = await state.client.rpc("rename_school_topic_node", {
       p_topic_id: topicId,
       p_title: title
     });
@@ -1289,8 +1301,8 @@
     await refreshContext();
   }
 
-  async function deleteStudentTopic(topicId) {
-    const { error } = await state.client.rpc("delete_student_topic_node", { p_topic_id: topicId });
+  async function deleteSchoolTopic(topicId) {
+    const { error } = await state.client.rpc("delete_school_topic_node", { p_topic_id: topicId });
     if (error) throw error;
     state.notice = success("Тему видалено.");
     await refreshContext();
@@ -1470,6 +1482,7 @@
       </section>
       ${state.selectedStudentId ? renderStudentInternalCard(state.selectedStudentId) : ""}
       ${state.topicProgressStudentId ? renderStudentTopicProgress(state.topicProgressStudentId) : ""}
+      ${state.curriculumTopicsOpen ? renderSchoolCurriculumManager() : ""}
     `);
   }
 
@@ -1507,6 +1520,7 @@
       </div>
       <div class="card"><h2>Найближчі заняття</h2>${renderLessonFeed(nextLessons(8))}</div>
       ${renderAdminStudentConditions()}
+      ${renderAdminCurriculum()}
     `;
   }
 
@@ -1514,6 +1528,13 @@
     if (!state.studentConditionsAvailable) return `<div class="card"><h2>Умови для учнів</h2><div class="msg error">Щоб увімкнути умови, виконай нову SQL-міграцію в Supabase.</div></div>`;
     const conditions = state.data.schoolStudentConditions[0] || {};
     return `<div class="card"><div class="item-head"><div><h2>Умови для учнів</h2><p class="muted">Учень підтверджує ознайомлення один раз для поточної версії тексту.</p></div><span class="exercise-kind-badge">Версія ${conditions.version || 1}</span></div><form id="studentConditionsForm" class="stack"><div class="field"><label>Текст умов <span class="field-optional">(необов’язково)</span></label><textarea name="body" maxlength="12000" placeholder="Наприклад: правила скасування, оплати та комунікації.">${escape(conditions.body || "")}</textarea></div><button class="btn primary" type="submit">Зберегти умови</button></form></div>`;
+  }
+
+  function renderAdminCurriculum() {
+    if (!state.sharedTopicsAvailable) return `<div class="card"><h2>Навчальна програма</h2><div class="msg error">Щоб створити спільне дерево тем, виконай SQL-оновлення навчальної програми в Supabase.</div></div>`;
+    const topics = schoolTopics();
+    const rootTopics = topics.filter((topic) => !topic.parent_id).length;
+    return `<div class="card"><div class="item-head"><div><h2>Навчальна програма</h2><p class="muted">Єдине дерево тем для всіх учнів. Викладачі лише позначають пройдене в картці конкретного учня.</p></div><button class="btn small primary" type="button" data-action="open-school-curriculum">Редагувати теми</button></div><div class="meta">${topics.length ? `Створено тем: ${topics.length} · верхніх рівнів: ${rootTopics}.` : "Програма ще порожня."}</div></div>`;
   }
 
   function renderPeople() {
@@ -2892,21 +2913,31 @@
   }
 
   function renderStudentTopicProgressPreview(studentId) {
-    if (!state.studentTopicsAvailable) return `<div class="filebox"><strong>Прогрес тем</strong><div class="meta">Виконай нову SQL-міграцію, щоб додати ієрархію тем.</div></div>`;
-    const topics = studentTopics(studentId);
-    const completed = topics.filter((topic) => topic.is_completed).length;
+    if (!state.sharedTopicsAvailable) return `<div class="filebox"><strong>Прогрес тем</strong><div class="meta">Виконай SQL-оновлення навчальної програми в Supabase.</div></div>`;
+    const topics = schoolTopics();
+    const completed = studentTopicProgress(studentId).filter((item) => item.is_completed).length;
     return `<section class="topic-progress-preview"><div><strong>Прогрес тем</strong><div class="meta">Пройдено: ${completed}/${topics.length || 0}</div></div><button class="btn small secondary" type="button" data-action="open-student-topic-progress" data-student-id="${escapeAttr(studentId)}">Відкрити прогрес</button></section>`;
   }
 
   function renderStudentTopicProgress(studentId) {
     const student = state.data.profiles.find((profile) => profile.id === studentId);
     if (!student || !canManageStudentCard(studentId)) return "";
-    const topics = studentTopics(studentId);
-    return `<div class="modal-backdrop topic-modal-backdrop" role="presentation"><section class="card topic-progress-modal" role="dialog" aria-modal="true" aria-label="Прогрес тем ${escapeAttr(student.full_name)}"><div class="item-head"><div><p class="eyebrow">Прогрес навчання</p><h2>${escape(student.full_name)}</h2><p class="muted">Створи тему, додай підтеми та позначай пройдене.</p></div><button class="btn small secondary" type="button" data-action="close-student-topic-progress">Закрити</button></div><form id="createStudentTopicForm" class="topic-create-form"><input type="hidden" name="studentId" value="${escapeAttr(studentId)}" /><div class="field"><label>Нова тема</label><input name="title" maxlength="200" required placeholder="Наприклад, Present Simple" /></div><div class="field"><label>Всередині теми <span class="field-optional">(необов’язково)</span></label><select name="parentId"><option value="">Верхній рівень</option>${topicParentOptions(topics).map((topic) => `<option value="${escapeAttr(topic.id)}">${escape(topic.label)}</option>`).join("")}</select></div><button class="btn primary" type="submit">Додати</button></form><div class="topic-tree">${renderTopicBranch(topics, null) || empty("Поки тем немає. Додай першу тему вище.")}</div></section></div>`;
+    const topics = schoolTopics();
+    return `<div class="modal-backdrop topic-modal-backdrop" role="presentation"><section class="card topic-progress-modal" role="dialog" aria-modal="true" aria-label="Прогрес тем ${escapeAttr(student.full_name)}"><div class="item-head"><div><p class="eyebrow">Прогрес навчання</p><h2>${escape(student.full_name)}</h2><p class="muted">Тематику задає адміністратор для всієї школи. Тут позначай лише пройдені учнем пункти.</p></div><button class="btn small secondary" type="button" data-action="close-student-topic-progress">Закрити</button></div><div class="topic-tree">${renderStudentProgressBranch(topics, null, studentId) || empty("Адміністратор ще не додав тем до навчальної програми.")}</div></section></div>`;
   }
 
-  function studentTopics(studentId) {
-    return state.data.studentTopicNodes.filter((topic) => topic.student_id === studentId);
+  function renderSchoolCurriculumManager() {
+    if (state.activeRole !== "admin") return "";
+    const topics = schoolTopics();
+    return `<div class="modal-backdrop topic-modal-backdrop" role="presentation"><section class="card topic-progress-modal" role="dialog" aria-modal="true" aria-label="Навчальна програма"><div class="item-head"><div><p class="eyebrow">Спільна структура</p><h2>Навчальна програма</h2><p class="muted">Це дерево однакове для всіх учнів. Викладачі відмічають у ньому прогрес окремо для кожного учня.</p></div><button class="btn small secondary" type="button" data-action="close-school-curriculum">Закрити</button></div><form id="createSchoolTopicForm" class="topic-create-form"><div class="field"><label>Нова тема</label><input name="title" maxlength="200" required placeholder="Наприклад, Present Simple" /></div><div class="field"><label>Всередині теми <span class="field-optional">(необов’язково)</span></label><select name="parentId"><option value="">Верхній рівень</option>${topicParentOptions(topics).map((topic) => `<option value="${escapeAttr(topic.id)}">${escape(topic.label)}</option>`).join("")}</select></div><button class="btn primary" type="submit">Додати</button></form><div class="topic-tree">${renderSchoolCurriculumBranch(topics, null) || empty("Поки тем немає. Додай першу тему вище.")}</div></section></div>`;
+  }
+
+  function schoolTopics() {
+    return state.data.schoolTopicNodes;
+  }
+
+  function studentTopicProgress(studentId) {
+    return state.data.studentTopicProgress.filter((item) => item.student_id === studentId);
   }
 
   function topicParentOptions(topics, parentId = null, depth = 0) {
@@ -2916,12 +2947,21 @@
       .flatMap((topic) => [{ ...topic, label: `${"— ".repeat(depth)}${topic.title}` }, ...topicParentOptions(topics, topic.id, depth + 1)]);
   }
 
-  function renderTopicBranch(topics, parentId) {
+  function renderStudentProgressBranch(topics, parentId, studentId) {
     const children = topics
       .filter((topic) => (topic.parent_id || null) === parentId)
       .sort((left, right) => left.sort_order - right.sort_order || left.created_at.localeCompare(right.created_at));
     if (!children.length) return "";
-    return `<ul>${children.map((topic) => `<li><div class="topic-row"><label><input type="checkbox" data-student-topic-checkbox data-topic-id="${escapeAttr(topic.id)}" ${topic.is_completed ? "checked" : ""} /><span class="${topic.is_completed ? "is-completed" : ""}">${escape(topic.title)}</span></label><div class="item-actions"><button class="btn small secondary" type="button" data-action="rename-student-topic" data-topic-id="${escapeAttr(topic.id)}" data-topic-title="${escapeAttr(topic.title)}">Змінити</button><button class="btn small danger" type="button" data-action="delete-student-topic" data-topic-id="${escapeAttr(topic.id)}">Видалити</button></div></div>${renderTopicBranch(topics, topic.id)}</li>`).join("")}</ul>`;
+    const completedTopicIds = new Set(studentTopicProgress(studentId).filter((item) => item.is_completed).map((item) => item.topic_id));
+    return `<ul>${children.map((topic) => { const isCompleted = completedTopicIds.has(topic.id); return `<li><div class="topic-row"><label><input type="checkbox" data-student-topic-progress data-student-id="${escapeAttr(studentId)}" data-topic-id="${escapeAttr(topic.id)}" ${isCompleted ? "checked" : ""} /><span class="${isCompleted ? "is-completed" : ""}">${escape(topic.title)}</span></label></div>${renderStudentProgressBranch(topics, topic.id, studentId)}</li>`; }).join("")}</ul>`;
+  }
+
+  function renderSchoolCurriculumBranch(topics, parentId) {
+    const children = topics
+      .filter((topic) => (topic.parent_id || null) === parentId)
+      .sort((left, right) => left.sort_order - right.sort_order || left.created_at.localeCompare(right.created_at));
+    if (!children.length) return "";
+    return `<ul>${children.map((topic) => `<li><div class="topic-row"><strong>${escape(topic.title)}</strong><div class="item-actions"><button class="btn small secondary" type="button" data-action="rename-school-topic" data-topic-id="${escapeAttr(topic.id)}" data-topic-title="${escapeAttr(topic.title)}">Змінити</button><button class="btn small danger" type="button" data-action="delete-school-topic" data-topic-id="${escapeAttr(topic.id)}">Видалити</button></div></div>${renderSchoolCurriculumBranch(topics, topic.id)}</li>`).join("")}</ul>`;
   }
 
   function renderStudentStatistics(studentId) {
@@ -3162,6 +3202,9 @@
     if (text.includes("Choose a different new teacher")) return "Для заміни обери іншого викладача.";
     if (text.includes("New teacher needs an active teacher role")) return "Новий користувач має мати активну роль викладача.";
     if (text.includes("Exercise template access denied") || text.includes("Exercise access denied")) return "Немає доступу до цієї вправи.";
+    if (text.includes("school_topic_nodes") || text.includes("student_topic_progress")) return "Прогрес тем ще не підключено. Виконай supabase/refine_shared_topic_progress.sql у Supabase SQL Editor.";
+    if (text.includes("Admin access required")) return "Структуру навчальної програми може змінювати лише адміністратор.";
+    if (text.includes("Student context access denied") || text.includes("Topic access denied")) return "Немає доступу до прогресу цього учня або обраної теми.";
     if (text.includes("Exercise group access denied")) return "Ця група вправ недоступна. Онови сторінку та вибери групу ще раз.";
     if (text.includes("exercise_groups_school_id_teacher_id_name_key")) return "Група з такою назвою вже є у твоїй бібліотеці.";
     if (text.includes("Only Wordwall assignments can be confirmed")) return "Вручну можна підтвердити лише вправу Wordwall.";
