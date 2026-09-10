@@ -215,3 +215,45 @@ Dashboard дозволяє створити та задеплоїти Edge Funct
 завершених уроків, опублікованих домашніх, відповідей і файлів цього учня. Фінанси,
 авторство старих уроків і заплановані заняття не переносяться. Картка учня та внутрішні
 нотатки доступні новому викладачу після прив’язки незалежно від цього прапорця.
+
+## Умови, прогрес і Google Calendar
+
+Для вже налаштованого проєкту виконай у **SQL Editor → New query** весь файл
+[`supabase/add_learning_progress_terms_and_google_calendar.sql`](./supabase/add_learning_progress_terms_and_google_calendar.sql).
+Він додає:
+
+1. Безпечне редагування вправ через нові версії: старі домашні та відповіді не змінюються.
+2. Умови для учнів з версіями та одноразовим підтвердженням ознайомлення.
+3. Приватний прогрес тем для кожного учня, який ведуть викладачі та адміністратори.
+4. Службові таблиці для добровільної синхронізації з Google Calendar.
+
+### Підключити Google Calendar
+
+Синхронізація одностороння: **School Portal → Google Calendar**. Після підключення
+користувач отримує окремий календар `School Portal`; у нього потрапляють лише його
+заняття. У Google не передаються внутрішні нотатки, оплати, домашні чи відповіді учня.
+
+1. У [Google Cloud Console](https://console.cloud.google.com/) створи або обери проєкт,
+   увімкни **Google Calendar API**.
+2. Налаштуй OAuth consent screen і створи **OAuth client ID** типу **Web application**. Якщо
+   consent screen лишається у статусі *Testing*, додай email усіх тестових користувачів у
+   список **Test users** у Google Cloud.
+3. Додай Authorized redirect URI:
+   `https://iecvprtcfhkbxjzoveiw.supabase.co/functions/v1/google-calendar-sync`
+4. У Supabase відкрий **Edge Functions → Deploy a new function → Via Editor**,
+   задай назву `google-calendar-sync` і встав код із
+   [`supabase/functions/google-calendar-sync/index.ts`](./supabase/functions/google-calendar-sync/index.ts).
+5. Для цієї функції вимкни gateway-перевірку JWT: Google повертається на callback без
+   Supabase-сесії. Безпека callback забезпечена одноразовим state із терміном 10 хвилин;
+   усі POST-запити з сайту функція все одно перевіряє за Supabase JWT.
+6. У **Edge Functions → Secrets** додай:
+   - `GOOGLE_OAUTH_CLIENT_ID` — Client ID із Google Cloud;
+   - `GOOGLE_OAUTH_CLIENT_SECRET` — Client Secret із Google Cloud;
+   - `GOOGLE_CALENDAR_TOKEN_ENCRYPTION_KEY` — випадковий секрет щонайменше з 32 символів;
+   - `APP_ORIGIN` — `https://teacher-web-site.vercel.app`.
+7. Натисни **Deploy function**. Не додавай вручну `SUPABASE_SERVICE_ROLE_KEY`: це
+   стандартний серверний секрет Supabase, доступний лише всередині Edge Function.
+
+Функція запитує лише Google scope `calendar.app.created`: вона створює власний окремий
+календар і не читає/не редагує основний календар користувача. Refresh token шифрується
+в Edge Function до запису в базу й не передається браузеру.

@@ -1933,6 +1933,201 @@ select[multiple] {
   max-width: 300px;
 }
 
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: none;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  color: #fff;
+  background: rgba(17, 42, 57, 0.38);
+  backdrop-filter: blur(2px);
+  font-weight: 800;
+}
+
+.loading-overlay.is-visible {
+  display: grid;
+}
+
+.loading-spinner {
+  width: 36px;
+  height: 36px;
+  border: 4px solid rgba(255, 255, 255, 0.38);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: loading-spin 0.8s linear infinite;
+}
+
+@keyframes loading-spin {
+  to { transform: rotate(360deg); }
+}
+
+.calendar-sync-card,
+.student-conditions,
+.topic-progress-preview {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  margin: 14px 0;
+  padding: 13px 15px;
+  border: 1px solid #b8ded9;
+  border-radius: 12px;
+  background: #f2fbfa;
+}
+
+.student-conditions {
+  display: grid;
+  margin: 0 0 16px;
+  border-color: #d5dfeb;
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.conditions-text {
+  line-height: 1.62;
+  white-space: normal;
+}
+
+.homework-card,
+.homework-review-item {
+  padding: 0;
+  overflow: hidden;
+}
+
+.homework-card-summary,
+.homework-card-content {
+  padding: 16px;
+}
+
+.homework-card-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.homework-card-summary::-webkit-details-marker {
+  display: none;
+}
+
+.homework-summary-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.details-toggle {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--accent-2);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+details[open] > .homework-card-summary .details-toggle {
+  font-size: 0;
+}
+
+details[open] > .homework-card-summary .details-toggle::after {
+  content: "Згорнути";
+  font-size: 12px;
+}
+
+.homework-card-content {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.modal-backdrop {
+  position: fixed;
+  z-index: 70;
+  inset: 0;
+  display: grid;
+  align-items: start;
+  overflow: auto;
+  padding: 28px;
+  background: rgba(19, 40, 54, 0.42);
+}
+
+.student-card-modal,
+.topic-progress-modal {
+  width: min(1040px, 100%);
+  margin: 0 auto;
+  box-shadow: 0 24px 64px rgba(7, 32, 55, 0.28);
+}
+
+.topic-modal-backdrop {
+  z-index: 80;
+}
+
+.topic-progress-modal {
+  width: min(780px, 100%);
+}
+
+.topic-create-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(210px, 0.7fr) auto;
+  align-items: end;
+  gap: 10px;
+  margin: 16px 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface-2);
+}
+
+.topic-tree ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 22px;
+  list-style: none;
+}
+
+.topic-tree > ul {
+  padding-left: 0;
+}
+
+.topic-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+}
+
+.topic-row label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  font-weight: 700;
+}
+
+.topic-row input {
+  width: auto;
+  margin: 0;
+}
+
+.topic-row .is-completed {
+  color: #167341;
+  text-decoration: line-through;
+}
+
 body.is-loading {
   cursor: progress;
 }
@@ -2051,5 +2246,24 @@ body.is-loading {
 
   .page-heading h1 {
     font-size: 26px;
+  }
+
+  .modal-backdrop {
+    padding: 12px;
+  }
+
+  .calendar-sync-card,
+  .topic-progress-preview,
+  .topic-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .topic-create-form {
+    grid-template-columns: 1fr;
+  }
+
+  .homework-card-summary {
+    align-items: flex-start;
   }
 }

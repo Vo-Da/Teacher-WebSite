@@ -21,8 +21,14 @@
     homeworkFilters: { studentStatus: "all", teacherStatus: "all", teacherStudentId: "all" },
     exerciseGroupsAvailable: true,
     teacherTransfersAvailable: true,
+    studentConditionsAvailable: true,
+    studentTopicsAvailable: true,
+    googleCalendar: { available: true, connected: false, calendarName: "" },
     editingTeacherStudentId: null,
+    editingExerciseTemplateId: null,
+    exerciseDraft: null,
     editingUser: null,
+    topicProgressStudentId: null,
     recording: null,
     showPasswordRecoveryRequest: false,
     passwordRecovery: new URLSearchParams(window.location.search).has("password-recovery"),
@@ -60,6 +66,10 @@
       attachments: [],
       studentInternalProfiles: [],
       studentInternalNotes: [],
+      schoolStudentConditions: [],
+      conditionAcknowledgements: [],
+      studentTopicNodes: [],
+      exerciseTemplateAnswers: [],
       ledger: []
     };
   }
@@ -78,6 +88,7 @@
     });
     const { data } = await state.client.auth.getSession();
     state.session = data.session;
+    applyGoogleCalendarRedirectNotice();
     state.client.auth.onAuthStateChange((event, session) => {
       state.session = session;
       if (event === "PASSWORD_RECOVERY") state.passwordRecovery = true;
@@ -102,11 +113,13 @@
     state.data = emptyData();
     state.exerciseGroupsAvailable = true;
     state.teacherTransfersAvailable = true;
+    state.studentConditionsAvailable = true;
+    state.studentTopicsAvailable = true;
+    state.googleCalendar = { available: true, connected: false, calendarName: "" };
     state.editingTeacherStudentId = null;
     state.editingUser = null;
     state.selectedLessonId = null;
     state.selectedHomeworkId = null;
-    state.selectedStudentId = null;
 
     if (!state.session) {
       state.activeRole = null;
@@ -181,7 +194,7 @@
     const schoolId = state.membership.school_id;
     const canAdminister = hasRole("admin");
     const canManageStudentContext = state.activeRole === "admin" || state.activeRole === "teacher";
-    const [subjects, relations, lessons, homework, profiles, memberships, studentInternalProfiles, studentInternalNotes, exerciseGroups, exerciseTemplates, exerciseAssignments, teacherTransfers] = await Promise.all([
+    const [subjects, relations, lessons, homework, profiles, memberships, studentInternalProfiles, studentInternalNotes, exerciseGroups, exerciseTemplates, exerciseAssignments, teacherTransfers, schoolStudentConditions, conditionAcknowledgements, studentTopicNodes] = await Promise.all([
       selectRows("subjects", (q) => q.eq("school_id", schoolId).order("name")),
       selectRows("teacher_students", (q) => q.eq("school_id", schoolId).eq("is_active", true)),
       selectRows("lessons", (q) => q.eq("school_id", schoolId).order("starts_at")),
@@ -193,7 +206,12 @@
       selectExerciseGroups(schoolId),
       selectRows("exercise_templates", (q) => q.eq("school_id", schoolId).order("created_at", { ascending: false })),
       selectRows("exercise_assignments", (q) => q.eq("school_id", schoolId).order("created_at", { ascending: false })),
-      selectTeacherTransfers(schoolId)
+      selectTeacherTransfers(schoolId),
+      selectOptionalRows("school_student_conditions", (q) => q.eq("school_id", schoolId), "studentConditionsAvailable"),
+      selectOptionalRows("student_condition_acknowledgements", (q) => q.eq("school_id", schoolId), "studentConditionsAvailable"),
+      canManageStudentContext
+        ? selectOptionalRows("student_topic_nodes", (q) => q.eq("school_id", schoolId).order("sort_order").order("created_at"), "studentTopicsAvailable")
+        : Promise.resolve([])
     ]);
 
     state.data.subjects = subjects;
@@ -208,6 +226,9 @@
     state.data.exerciseTemplates = exerciseTemplates;
     state.data.exerciseAssignments = exerciseAssignments;
     state.data.teacherTransfers = teacherTransfers;
+    state.data.schoolStudentConditions = schoolStudentConditions;
+    state.data.conditionAcknowledgements = conditionAcknowledgements;
+    state.data.studentTopicNodes = studentTopicNodes;
 
     const lessonIds = lessons.map((item) => item.id);
     const homeworkIds = homework.map((item) => item.id);
@@ -216,6 +237,7 @@
     state.data.submissions = await selectRowsIn("homework_submissions", "homework_student_id", state.data.homeworkStudents.map((item) => item.id));
     state.data.exerciseAssignmentStudents = await selectRowsIn("exercise_assignment_students", "assignment_id", exerciseAssignments.map((item) => item.id));
     state.data.exerciseAttempts = await selectRowsIn("exercise_attempts", "assignment_student_id", state.data.exerciseAssignmentStudents.map((item) => item.id));
+    state.data.exerciseTemplateAnswers = await selectRowsIn("exercise_template_answers", "template_id", exerciseTemplates.map((item) => item.id));
     state.data.attachments = await selectRows("file_attachments", (q) => q.eq("school_id", schoolId).order("created_at", { ascending: false }));
 
     if (canAdminister) {
@@ -228,6 +250,7 @@
       state.data.rates = rates;
       state.data.ledger = ledger;
     }
+    state.googleCalendar = await googleCalendarStatus();
   }
 
   async function selectRows(table, modifier) {
@@ -249,6 +272,18 @@
     } catch (error) {
       if (error?.code === "PGRST205" || error?.code === "42P01" || String(error?.message || "").includes("exercise_groups")) {
         state.exerciseGroupsAvailable = false;
+        return [];
+      }
+      throw error;
+    }
+  }
+
+  async function selectOptionalRows(table, modifier, availabilityProperty) {
+    try {
+      return await selectRows(table, modifier);
+    } catch (error) {
+      if (error?.code === "PGRST205" || error?.code === "42P01" || String(error?.message || "").includes(table)) {
+        state[availabilityProperty] = false;
         return [];
       }
       throw error;
@@ -367,13 +402,22 @@
   }
 
   function shell(content) {
-    return `<main class="production-app">${content}</main>`;
+    return `<main class="production-app">${content}<div class="loading-overlay${state.loading ? " is-visible" : ""}" data-loading-overlay aria-live="polite" aria-hidden="${state.loading ? "false" : "true"}"><span class="loading-spinner" aria-hidden="true"></span><span>Завантажуємо...</span></div></main>`;
   }
 
   async function handleClick(event) {
     const target = event.target.closest("[data-action]");
     if (!target) return;
     const action = target.dataset.action;
+    const remoteActions = new Set([
+      "acknowledge-student-conditions", "approve-request", "delete-exercise-group",
+      "delete-lesson", "delete-student-topic", "delete-user", "disconnect-google-calendar",
+      "download-file", "edit-user", "mark-homework-reviewed", "remove-assignment",
+      "rename-student-topic", "review-wordwall-exercise", "suspend-user", "activate-user",
+      "sync-google-calendar", "toggle-student-topic"
+    ]);
+    const showLoading = remoteActions.has(action);
+    if (showLoading) setLoading(true);
     try {
       if (action === "logout") {
         await state.client.auth.signOut();
@@ -467,6 +511,59 @@
       if (action === "close-student-card") {
         state.selectedStudentId = null;
         renderDashboard();
+        return;
+      }
+      if (action === "open-student-topic-progress") {
+        state.topicProgressStudentId = target.dataset.studentId || null;
+        renderDashboard();
+        return;
+      }
+      if (action === "close-student-topic-progress") {
+        state.topicProgressStudentId = null;
+        renderDashboard();
+        return;
+      }
+      if (action === "toggle-student-topic") {
+        await setStudentTopicCompleted(target.dataset.topicId, target.checked === true);
+        return;
+      }
+      if (action === "rename-student-topic") {
+        const currentTitle = target.dataset.topicTitle || "";
+        const nextTitle = prompt("Нова назва теми", currentTitle);
+        if (nextTitle === null || nextTitle.trim() === currentTitle.trim()) return;
+        await renameStudentTopic(target.dataset.topicId, nextTitle);
+        return;
+      }
+      if (action === "delete-student-topic") {
+        if (!confirm("Видалити цю тему та всі її підтеми?")) return;
+        await deleteStudentTopic(target.dataset.topicId);
+        return;
+      }
+      if (action === "edit-exercise-template") {
+        startExerciseTemplateEdit(target.dataset.templateId);
+        return;
+      }
+      if (action === "cancel-edit-exercise-template") {
+        state.editingExerciseTemplateId = null;
+        state.exerciseDraft = null;
+        renderDashboard();
+        return;
+      }
+      if (action === "connect-google-calendar") {
+        await connectGoogleCalendar();
+        return;
+      }
+      if (action === "sync-google-calendar") {
+        await syncGoogleCalendar();
+        return;
+      }
+      if (action === "disconnect-google-calendar") {
+        if (!confirm("Вимкнути синхронізацію? Уже створені події залишаться у Google Calendar, але надалі не оновлюватимуться.")) return;
+        await disconnectGoogleCalendar();
+        return;
+      }
+      if (action === "acknowledge-student-conditions") {
+        await acknowledgeStudentConditions();
         return;
       }
       if (action === "start-media-recording") {
@@ -569,6 +666,7 @@
       }
       if (action === "delete-lesson") {
         if (!confirm("Видалити це заняття?")) return;
+        await removeGoogleCalendarLesson(target.dataset.lessonId);
         const { error } = await state.client.from("lessons").delete().eq("id", target.dataset.lessonId);
         if (error) throw error;
         state.notice = success("Заняття видалено.");
@@ -577,6 +675,8 @@
     } catch (error) {
       state.notice = failure(friendlyError(error));
       renderCurrent();
+    } finally {
+      if (showLoading) setLoading(false);
     }
   }
 
@@ -594,6 +694,13 @@
     }
     if (input.matches?.("[data-multiple-select-option]")) {
       updateMultipleSelectAnswer(input.closest("[data-multiple-select-question]"));
+      return;
+    }
+    if (input.matches?.("[data-student-topic-checkbox]")) {
+      void setStudentTopicCompleted(input.dataset.topicId, input.checked).catch((error) => {
+        state.notice = failure(friendlyError(error));
+        renderCurrent();
+      });
       return;
     }
     if (input.name === "exerciseKind" && input.form?.id === "createExerciseTemplateForm") {
@@ -636,6 +743,8 @@
     const form = event.target;
     if (!form.id) return;
     event.preventDefault();
+    if (form.id === "createExerciseTemplateForm") saveExerciseDraft(form);
+    setLoading(true);
     try {
       if (form.id === "loginForm") await login(form);
       if (form.id === "passwordRecoveryRequestForm") await requestPasswordRecovery(form);
@@ -657,11 +766,15 @@
       if (form.id === "createExerciseTemplateForm") await createExerciseTemplate(form);
       if (form.id === "submitExerciseForm") await submitExercise(form);
       if (form.id === "studentInternalCardForm") await saveStudentInternalCard(form);
+      if (form.id === "studentConditionsForm") await saveStudentConditions(form);
+      if (form.id === "createStudentTopicForm") await createStudentTopic(form);
       if (form.id === "adminCreateUserForm") await createAdminUser(form);
       if (form.id === "updateAdminUserForm") await updateAdminUser(form);
     } catch (error) {
       state.notice = failure(friendlyError(error));
       renderCurrent();
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -859,6 +972,7 @@
     if (error) throw error;
     state.selectedLessonId = data;
     state.selectedDate = isoDate(startsAt);
+    await syncGoogleCalendarLesson(data);
     state.notice = success("Заняття створено. Ціну для кожного учня зафіксовано.");
     await refreshContext();
   }
@@ -875,6 +989,7 @@
     });
     if (error) throw error;
     await uploadInputFiles(form, { lesson_id: lessonId }, '[name="lessonFiles"], [data-recorded-media][data-capture-target="lesson"]');
+    await syncGoogleCalendarLesson(lessonId);
     state.notice = success("Картку заняття збережено. За потреби фінансовий запис створено автоматично.");
     await refreshContext();
   }
@@ -974,10 +1089,68 @@
       p_answer_data: answerData
     };
     if (groupId) args.p_group_id = groupId;
-    const { error } = await state.client.rpc("create_exercise_template", args);
+    const isReplacing = Boolean(state.editingExerciseTemplateId);
+    if (isReplacing) args.p_template_id = state.editingExerciseTemplateId;
+    const { error } = await state.client.rpc(isReplacing ? "replace_exercise_template" : "create_exercise_template", args);
     if (error) throw error;
-    state.notice = success("Вправу додано до бібліотеки.");
+    state.editingExerciseTemplateId = null;
+    state.exerciseDraft = null;
+    state.notice = success(isReplacing
+      ? "Збережено нову версію вправи. Старі домашні та відповіді не змінені."
+      : "Вправу додано до бібліотеки.");
     await refreshContext();
+  }
+
+  function saveExerciseDraft(form) {
+    state.exerciseDraft = {
+      title: value(form, "title"),
+      prompt: value(form, "prompt"),
+      kind: value(form, "exerciseKind") || "multiple_choice",
+      importRows: String(new FormData(form).get("importRows") || ""),
+      wordwallUrl: value(form, "wordwallUrl"),
+      groupId: value(form, "groupId")
+    };
+  }
+
+  function startExerciseTemplateEdit(templateId) {
+    const template = exerciseTemplateById(templateId);
+    if (!template || template.teacher_id !== state.session.user.id) return;
+    state.editingExerciseTemplateId = template.id;
+    state.exerciseDraft = exerciseDraftFromTemplate(template);
+    state.activeView = "exercises";
+    renderDashboard();
+    requestAnimationFrame(() => document.getElementById("createExerciseTemplateForm")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }
+
+  function exerciseDraftFromTemplate(template) {
+    const answerData = exerciseAnswerKey(template.id)?.answer_data || {};
+    const items = exerciseItems(template);
+    const rows = items.map((item) => {
+      const answer = Array.isArray(answerData.items) ? answerData.items.find((candidate) => candidate?.id === item.id) || {} : {};
+      if (template.kind === "word_order") return (item.tokens || []).map((token) => token.text).join(" / ");
+      if (template.kind === "matching_pairs") {
+        const right = matchingRightOptions(template).find((option) => option.id === answer.correctRightId);
+        return `${item.left?.text || ""} / ${right?.text || ""}`;
+      }
+      if (template.kind === "fill_blank") return `${item.prompt || ""} /  / ${(answer.acceptedAnswers || []).join(";")}`;
+      if (template.kind === "multiple_choice" || template.kind === "multiple_select") {
+        const options = Array.isArray(item.options) ? item.options : [];
+        const correctIds = Array.isArray(answer.correctOptionIds)
+          ? answer.correctOptionIds
+          : answer.correctOptionId ? [answer.correctOptionId] : [];
+        const correctOptions = options.filter((option) => correctIds.includes(option.id)).map((option) => option.text);
+        return `${item.prompt || ""} / ${options.map((option) => option.text).join(";")} / ${correctOptions.join(";")}`;
+      }
+      return "";
+    });
+    return {
+      title: template.title || "",
+      prompt: template.prompt || "",
+      kind: template.kind || "multiple_choice",
+      importRows: template.kind === "wordwall" ? "" : rows.join("\n"),
+      wordwallUrl: template.kind === "wordwall" ? String(template.content?.url || "") : "",
+      groupId: template.group_id || ""
+    };
   }
 
   async function createExerciseGroup(form) {
@@ -1058,6 +1231,71 @@
     await refreshContext();
   }
 
+  async function saveStudentConditions(form) {
+    if (!state.studentConditionsAvailable) throw new Error("Умови для учнів ще не підключені. Виконай нову SQL-міграцію в Supabase.");
+    const { data, error } = await state.client.rpc("save_school_student_conditions", {
+      p_school_id: state.school.id,
+      p_body: value(form, "body")
+    });
+    if (error) throw error;
+    state.notice = success(`Умови збережено. Поточна версія: ${data}.`);
+    await refreshContext();
+  }
+
+  async function acknowledgeStudentConditions() {
+    if (!state.studentConditionsAvailable) return;
+    const { error } = await state.client.rpc("acknowledge_school_student_conditions", {
+      p_school_id: state.school.id
+    });
+    if (error) throw error;
+    state.notice = success("Підтвердження збережено.");
+    await refreshContext();
+  }
+
+  async function createStudentTopic(form) {
+    const studentId = value(form, "studentId");
+    const { error } = await state.client.rpc("create_student_topic_node", {
+      p_school_id: state.school.id,
+      p_student_id: studentId,
+      p_title: value(form, "title"),
+      p_parent_id: value(form, "parentId") || null
+    });
+    if (error) throw error;
+    state.notice = success("Тему додано до прогресу учня.");
+    await refreshContext();
+  }
+
+  async function setStudentTopicCompleted(topicId, isCompleted) {
+    setLoading(true);
+    try {
+      const { error } = await state.client.rpc("set_student_topic_completed", {
+        p_topic_id: topicId,
+        p_is_completed: isCompleted
+      });
+      if (error) throw error;
+      await refreshContext();
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function renameStudentTopic(topicId, title) {
+    const { error } = await state.client.rpc("rename_student_topic_node", {
+      p_topic_id: topicId,
+      p_title: title
+    });
+    if (error) throw error;
+    state.notice = success("Назву теми оновлено.");
+    await refreshContext();
+  }
+
+  async function deleteStudentTopic(topicId) {
+    const { error } = await state.client.rpc("delete_student_topic_node", { p_topic_id: topicId });
+    if (error) throw error;
+    state.notice = success("Тему видалено.");
+    await refreshContext();
+  }
+
   async function createAdminUser(form) {
     const password = value(form, "password");
     if (password.length < 8) throw new Error("Пароль має містити щонайменше 8 символів.");
@@ -1082,6 +1320,93 @@
       email: value(form, "email"),
       roles
     });
+  }
+
+  async function callGoogleCalendar(payload) {
+    const { data, error } = await state.client.functions.invoke("google-calendar-sync", {
+      body: { ...payload, schoolId: state.school.id }
+    });
+    if (error) {
+      let message = "";
+      try {
+        const response = error.context;
+        const body = response && typeof response.json === "function" ? await response.json() : null;
+        message = typeof body?.error === "string" ? body.error : "";
+      } catch (_) {
+        // A generic message is safer than exposing an upstream OAuth error.
+      }
+      throw new Error(message || "Не вдалося виконати дію з Google Calendar.");
+    }
+    if (data?.error) throw new Error(data.error);
+    return data || {};
+  }
+
+  async function googleCalendarStatus() {
+    try {
+      const data = await callGoogleCalendar({ action: "status" });
+      return { available: true, connected: data.connected === true, calendarName: String(data.calendarName || "School Portal") };
+    } catch (_) {
+      return { available: false, connected: false, calendarName: "" };
+    }
+  }
+
+  function renderGoogleCalendarConnection() {
+    const calendar = state.googleCalendar;
+    if (!calendar.available) return `<div class="calendar-sync-card"><div><strong>Google Calendar</strong><div class="meta">Синхронізацію буде доступно після підключення серверної функції.</div></div></div>`;
+    if (calendar.connected) return `<div class="calendar-sync-card"><div><strong>Google Calendar підключено</strong><div class="meta">Заняття синхронізуються в окремий календар «${escape(calendar.calendarName || "School Portal")}».</div></div><div class="item-actions"><button class="btn small secondary" type="button" data-action="sync-google-calendar">Синхронізувати</button><button class="btn small secondary" type="button" data-action="disconnect-google-calendar">Вимкнути</button></div></div>`;
+    return `<div class="calendar-sync-card"><div><strong>Додати до Google Calendar</strong><div class="meta">За бажанням створимо окремий календар School Portal лише для твоїх занять.</div></div><button class="btn small secondary" type="button" data-action="connect-google-calendar">Підключити Google</button></div>`;
+  }
+
+  async function connectGoogleCalendar() {
+    setLoading(true);
+    try {
+      const data = await callGoogleCalendar({ action: "connect" });
+      if (!data.authorizationUrl) throw new Error("Не вдалося почати підключення Google Calendar.");
+      window.location.assign(data.authorizationUrl);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function syncGoogleCalendar() {
+    const data = await callGoogleCalendar({ action: "sync" });
+    state.notice = success(data.message || "Календар синхронізовано.");
+    await refreshContext();
+  }
+
+  async function disconnectGoogleCalendar() {
+    const data = await callGoogleCalendar({ action: "disconnect" });
+    state.notice = success(data.message || "Синхронізацію вимкнено.");
+    await refreshContext();
+  }
+
+  async function syncGoogleCalendarLesson(lessonId) {
+    if (!lessonId || !state.googleCalendar.available) return;
+    try {
+      await callGoogleCalendar({ action: "sync", lessonId });
+    } catch (_) {
+      // The core lesson workflow stays available if Google temporarily rejects a sync.
+    }
+  }
+
+  async function removeGoogleCalendarLesson(lessonId) {
+    if (!lessonId || !state.googleCalendar.available) return;
+    try {
+      await callGoogleCalendar({ action: "remove", lessonId });
+    } catch (_) {
+      // Removing the lesson in School Portal must remain possible if Google is unavailable.
+    }
+  }
+
+  function applyGoogleCalendarRedirectNotice() {
+    const url = new URL(window.location.href);
+    const result = url.searchParams.get("google-calendar");
+    if (!result) return;
+    state.notice = result === "connected"
+      ? success("Google Calendar підключено. Найближчі заняття синхронізовано.")
+      : failure("Не вдалося підключити Google Calendar. Спробуй ще раз.");
+    url.searchParams.delete("google-calendar");
+    window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
   }
 
   async function callAdminUsers(payload) {
@@ -1143,6 +1468,8 @@
           </section>
         </div>
       </section>
+      ${state.selectedStudentId ? renderStudentInternalCard(state.selectedStudentId) : ""}
+      ${state.topicProgressStudentId ? renderStudentTopicProgress(state.topicProgressStudentId) : ""}
     `);
   }
 
@@ -1179,7 +1506,14 @@
         ${metricCard("Списано цього місяця", money(chargedThisMonth), "Проведені та платні скасування")}
       </div>
       <div class="card"><h2>Найближчі заняття</h2>${renderLessonFeed(nextLessons(8))}</div>
+      ${renderAdminStudentConditions()}
     `;
+  }
+
+  function renderAdminStudentConditions() {
+    if (!state.studentConditionsAvailable) return `<div class="card"><h2>Умови для учнів</h2><div class="msg error">Щоб увімкнути умови, виконай нову SQL-міграцію в Supabase.</div></div>`;
+    const conditions = state.data.schoolStudentConditions[0] || {};
+    return `<div class="card"><div class="item-head"><div><h2>Умови для учнів</h2><p class="muted">Учень підтверджує ознайомлення один раз для поточної версії тексту.</p></div><span class="exercise-kind-badge">Версія ${conditions.version || 1}</span></div><form id="studentConditionsForm" class="stack"><div class="field"><label>Текст умов <span class="field-optional">(необов’язково)</span></label><textarea name="body" maxlength="12000" placeholder="Наприклад: правила скасування, оплати та комунікації.">${escape(conditions.body || "")}</textarea></div><button class="btn primary" type="submit">Зберегти умови</button></form></div>`;
   }
 
   function renderPeople() {
@@ -1211,7 +1545,6 @@
         return `<div class="item relation-item"><div class="relation-summary"><strong>${escape(nameOf(relation.teacher_id))}</strong><span>викладає</span><strong>${escape(nameOf(relation.student_id))}</strong><div class="item-actions"><button class="btn small secondary" type="button" data-action="edit-assignment" data-relation-id="${relation.id}">Змінити</button><button class="btn small secondary" type="button" data-action="remove-assignment" data-relation-id="${relation.id}">Прибрати</button></div></div>${isEditing ? `<form id="replaceTeacherForm" class="relation-editor"><input type="hidden" name="relationId" value="${escapeAttr(relation.id)}" /><input type="hidden" name="previousTeacherId" value="${escapeAttr(relation.teacher_id)}" /><input type="hidden" name="studentId" value="${escapeAttr(relation.student_id)}" /><div class="field"><label>Новий викладач</label><select name="newTeacherId" required><option value="" selected hidden>Обери викладача</option>${replacementTeachers.map((teacher) => `<option value="${escapeAttr(teacher.user_id)}">${escape(nameOf(teacher.user_id))}</option>`).join("")}</select></div><label class="role-option"><input name="shareArchive" type="checkbox" value="true" /><span><strong>Передати навчальний архів</strong><small>Новий викладач переглядатиме завершені уроки, опубліковані домашні, відповіді, нотатки й файли цього учня. Доступ лише для читання; фінанси не передаються.</small></span></label><div class="meta">Картка учня та внутрішні нотатки доступні новому викладачу після прив’язки завжди. Заплановані заняття не переносяться.</div><div class="relation-editor-actions"><button class="btn primary" type="submit" ${replacementTeachers.length ? "" : "disabled"}>Зберегти зміну</button><button class="btn secondary" type="button" data-action="cancel-edit-assignment">Скасувати</button></div>${replacementTeachers.length ? "" : '<div class="msg error">Немає іншого активного викладача, якого можна призначити.</div>'}</form>` : ""}</div>`;
       }).join("") || empty("Ще немає призначень.")}</div></div>
       <div class="work-grid"><div class="card"><h2>Викладачі</h2>${renderPeopleList(teachers, "teachers")}</div><div class="card"><h2>Учні</h2>${renderPeopleList(students, "students")}</div></div>
-      ${state.selectedStudentId ? renderStudentInternalCard(state.selectedStudentId) : ""}
     `;
   }
 
@@ -1270,9 +1603,10 @@
     return `
       <div class="page-heading"><div><p class="eyebrow">Мій розклад</p><h1>Календар викладача</h1><p class="muted">Створи заняття, відміть його статус і працюй з домашніми без переходів між системами.</p></div></div>
       <div class="metric-grid">${metricCard("Сьогодні", todayLessons.length, "занять")}${metricCard("Мої учні", ownStudents.length, "активних")}${metricCard("Заплановано", lessons.filter((item) => item.status === "planned").length, "у розкладі")}${metricCard("На перевірці", teacherHomeworkStudents().filter((item) => item.status === "submitted").length, "робіт")}</div>
+      ${renderGoogleCalendarConnection()}
       <div class="calendar-workspace">
         <div class="card calendar-column"><div class="calendar-actions"><h2>Календар</h2><button class="btn small secondary" data-action="calendar-today">Сьогодні</button></div>${renderCalendar(lessons)}</div>
-        <div class="card day-column"><h2>${formatDate(state.selectedDate)}</h2><div class="list">${renderLessonCards(dayLessons(lessons), true)}</div><div class="filebox"><strong>Вільні вікна</strong><div class="meta">${freeSlots(dayLessons(lessons)).join(", ") || "На цей день вільних годин у робочому діапазоні немає."}</div></div></div>
+        <div class="card day-column"><h2>${formatDate(state.selectedDate)}</h2><div class="list">${renderLessonCards(dayLessons(lessons), true)}</div></div>
       </div>
       <div class="work-grid"><div class="card"><h2>Нове заняття</h2>${renderLessonForm(ownStudents)}</div><div class="card"><h2>Картка заняття</h2>${selected ? renderLessonPanel(selected) : empty("Обери заняття в списку дня, щоб змінити статус, додати файл або домашнє.")}</div></div>
     `;
@@ -1289,7 +1623,6 @@
         return `<div class="item"><div class="item-head"><div><p class="item-title">${escape(student.full_name)}</p><div class="meta">Наступний урок: ${upcoming ? escape(formatDateTime(upcoming.starts_at)) + " · " + escape(subjectName(upcoming.subject_id)) : "не заплановано"}</div><div class="meta">Робіт на перевірці: ${submitted}</div></div><div class="item-actions"><span class="role-badge role-student">Учень</span><button class="btn small secondary" type="button" data-action="open-student-card" data-student-id="${student.id}">Картка учня</button></div></div></div>`;
       }).join("") || empty("Адміністратор ще не призначив тобі учнів.")}</div></div>
       ${archiveLessons.length ? `<div class="card"><div class="item-head"><div><h2>Переданий архів занять</h2><p class="muted">Лише читання: завершені або скасовані заняття переданих учнів.</p></div><span class="role-badge role-teacher">Архів</span></div>${renderTransferredArchiveLessons(archiveLessons)}</div>` : ""}
-      ${state.selectedStudentId ? renderStudentInternalCard(state.selectedStudentId) : ""}
     `;
   }
 
@@ -1309,26 +1642,28 @@
     const groups = ownExerciseGroups();
     return `
       <div class="page-heading"><div><p class="eyebrow">Практика</p><h1>Вправи</h1><p class="muted">Створи набір до 30 завдань, а потім додай його до домашнього завдання.</p></div></div>
-      <div class="work-grid"><div class="card"><h2>Нова вправа</h2>${renderExerciseTemplateForm(groups)}</div><div class="card"><h2>Групи вправ</h2>${renderExerciseGroupForm(groups)}</div></div>
+      <div class="work-grid"><div class="card"><h2>${state.editingExerciseTemplateId ? "Редагувати вправу" : "Нова вправа"}</h2>${renderExerciseTemplateForm(groups)}</div><div class="card"><h2>Групи вправ</h2>${renderExerciseGroupForm(groups)}</div></div>
       <div class="card"><h2>Бібліотека вправ</h2>${renderExerciseLibrary(templates, groups)}</div>
     `;
   }
 
   function renderExerciseTemplateForm(groups) {
+    const draft = state.exerciseDraft || { title: "", prompt: "", kind: "multiple_choice", importRows: "", wordwallUrl: "", groupId: "" };
+    const editing = Boolean(state.editingExerciseTemplateId);
     return `
       <form id="createExerciseTemplateForm" class="stack">
-        <div class="field"><label>Тип вправи</label><select name="exerciseKind"><option value="multiple_choice">Вибрати правильний варіант</option><option value="multiple_select">Обрати всі правильні варіанти</option><option value="fill_blank">Вставити пропущене слово</option><option value="word_order">Поставити слова в правильному порядку</option><option value="matching_pairs">Знайти пари</option><option value="wordwall">Wordwall</option></select></div>
-        <div class="field"><label>Група / тема <span class="field-optional">(необов’язково)</span></label><select name="groupId"><option value="">Без групи</option>${groups.map((group) => `<option value="${group.id}">${escape(group.name)}</option>`).join("")}</select></div>
-        <div class="field"><label>Назва вправи</label><input name="title" maxlength="200" placeholder="Наприклад, Present Simple: повторення" /></div>
-        <div class="field"><label>Текст / інструкція <span class="field-optional">(необов’язково)</span></label><textarea name="prompt" maxlength="10000" placeholder="Напиши запитання, речення з пропуском або коротку інструкцію."></textarea></div>
-        <div class="exercise-import-fields" data-exercise-import-fields><div class="field"><label>Рядки вправи</label><textarea name="importRows" data-exercise-import-input rows="10" placeholder="She ___ to school. / go;goes;going;gone / goes"></textarea></div><button class="btn small secondary" type="button" data-action="preview-exercise-import">Перевірити рядки</button><div class="exercise-import-preview" data-exercise-import-preview></div></div>
-        <div class="exercise-kind-fields is-visible" data-exercise-kind-fields="multiple_choice"><div class="filebox"><strong>Формат для вибору варіанту</strong><br><code>Речення / варіант 1;варіант 2;... / правильний варіант;ще один прийнятний</code><br><span class="meta">Учень обирає один варіант. У третій колонці через <code>;</code> можна вказати кілька прийнятних відповідей. Максимум 30 рядків.</span></div></div>
-        <div class="exercise-kind-fields" data-exercise-kind-fields="multiple_select"><div class="filebox"><strong>Формат для кількох правильних варіантів</strong><br><code>Which are colours? / red;book;blue;green / red;blue;green</code><br><span class="meta">Правильні варіанти в останній колонці розділяй символом <code>;</code>. Учень повинен обрати всі правильні відповіді. Максимум 30 завдань.</span></div></div>
-        <div class="exercise-kind-fields" data-exercise-kind-fields="fill_blank"><div class="filebox"><strong>Формат для пропуску</strong><br><code>Речення /  / правильна відповідь;допустима відповідь</code><br><span class="meta">Середня колонка лишається порожньою. Максимум 30 рядків.</span></div></div>
-        <div class="exercise-kind-fields" data-exercise-kind-fields="word_order"><div class="filebox"><strong>Формат для порядку слів</strong><br><code>She / goes / to / school / every / day.</code><br><span class="meta">Один рядок - одне речення. Слова мають бути в правильному порядку; учень отримає їх перемішаними. Максимум 30 речень.</span></div></div>
-        <div class="exercise-kind-fields" data-exercise-kind-fields="matching_pairs"><div class="filebox"><strong>Формат для пар</strong><br><code>go / went</code><br><span class="meta">Один рядок - одна пара. Учень побачить дві перемішані колонки. Для однієї вправи додай від 2 до 30 пар.</span></div></div>
-        <div class="exercise-kind-fields" data-exercise-kind-fields="wordwall"><div class="field"><label>Посилання на Wordwall</label><input name="wordwallUrl" type="url" placeholder="https://wordwall.net/..." /><div class="meta">Учень відкриє вправу в Wordwall, а результат перевіриш у своєму кабінеті Wordwall.</div></div></div>
-        <button class="btn primary" type="submit">Додати до бібліотеки</button>
+        <div class="field"><label>Тип вправи</label><select name="exerciseKind"><option value="multiple_choice" ${draft.kind === "multiple_choice" ? "selected" : ""}>Вибрати правильний варіант</option><option value="multiple_select" ${draft.kind === "multiple_select" ? "selected" : ""}>Обрати всі правильні варіанти</option><option value="fill_blank" ${draft.kind === "fill_blank" ? "selected" : ""}>Вставити пропущене слово</option><option value="word_order" ${draft.kind === "word_order" ? "selected" : ""}>Поставити слова в правильному порядку</option><option value="matching_pairs" ${draft.kind === "matching_pairs" ? "selected" : ""}>Знайти пари</option><option value="wordwall" ${draft.kind === "wordwall" ? "selected" : ""}>Wordwall</option></select></div>
+        <div class="field"><label>Група / тема <span class="field-optional">(необов’язково)</span></label><select name="groupId"><option value="">Без групи</option>${groups.map((group) => `<option value="${escapeAttr(group.id)}" ${group.id === draft.groupId ? "selected" : ""}>${escape(group.name)}</option>`).join("")}</select></div>
+        <div class="field"><label>Назва вправи</label><input name="title" maxlength="200" value="${escapeAttr(draft.title)}" placeholder="Наприклад, Present Simple: повторення" required /></div>
+        <div class="field"><label>Текст / інструкція <span class="field-optional">(необов’язково)</span></label><textarea name="prompt" maxlength="10000" placeholder="Напиши запитання, речення з пропуском або коротку інструкцію.">${escape(draft.prompt)}</textarea></div>
+        <div class="exercise-import-fields ${draft.kind === "wordwall" ? "is-hidden" : ""}" data-exercise-import-fields><div class="field"><label>Рядки вправи</label><textarea name="importRows" data-exercise-import-input rows="10" placeholder="She ___ to school. / go;goes;going;gone / goes">${escape(draft.importRows)}</textarea></div><button class="btn small secondary" type="button" data-action="preview-exercise-import">Перевірити рядки</button><div class="exercise-import-preview" data-exercise-import-preview></div></div>
+        <div class="exercise-kind-fields ${draft.kind === "multiple_choice" ? "is-visible" : ""}" data-exercise-kind-fields="multiple_choice"><div class="filebox"><strong>Формат для вибору варіанту</strong><br><code>Речення / варіант 1;варіант 2;... / правильний варіант;ще один прийнятний</code><br><span class="meta">Учень обирає один варіант. У третій колонці через <code>;</code> можна вказати кілька прийнятних відповідей. Максимум 30 рядків.</span></div></div>
+        <div class="exercise-kind-fields ${draft.kind === "multiple_select" ? "is-visible" : ""}" data-exercise-kind-fields="multiple_select"><div class="filebox"><strong>Формат для кількох правильних варіантів</strong><br><code>Which are colours? / red;book;blue;green / red;blue;green</code><br><span class="meta">Правильні варіанти в останній колонці розділяй символом <code>;</code>. Учень повинен обрати всі правильні відповіді. Максимум 30 завдань.</span></div></div>
+        <div class="exercise-kind-fields ${draft.kind === "fill_blank" ? "is-visible" : ""}" data-exercise-kind-fields="fill_blank"><div class="filebox"><strong>Формат для пропуску</strong><br><code>Речення /  / правильна відповідь;допустима відповідь</code><br><span class="meta">Середня колонка лишається порожньою. Максимум 30 рядків.</span></div></div>
+        <div class="exercise-kind-fields ${draft.kind === "word_order" ? "is-visible" : ""}" data-exercise-kind-fields="word_order"><div class="filebox"><strong>Формат для порядку слів</strong><br><code>She / goes / to / school / every / day.</code><br><span class="meta">Один рядок - одне речення. Слова мають бути в правильному порядку; учень отримає їх перемішаними. Максимум 30 речень.</span></div></div>
+        <div class="exercise-kind-fields ${draft.kind === "matching_pairs" ? "is-visible" : ""}" data-exercise-kind-fields="matching_pairs"><div class="filebox"><strong>Формат для пар</strong><br><code>go / went</code><br><span class="meta">Один рядок - одна пара. Учень побачить дві перемішані колонки. Для однієї вправи додай від 2 до 30 пар.</span></div></div>
+        <div class="exercise-kind-fields ${draft.kind === "wordwall" ? "is-visible" : ""}" data-exercise-kind-fields="wordwall"><div class="field"><label>Посилання на Wordwall</label><input name="wordwallUrl" type="url" value="${escapeAttr(draft.wordwallUrl)}" placeholder="https://wordwall.net/..." /><div class="meta">Учень відкриє вправу в Wordwall, а результат перевіриш у своєму кабінеті Wordwall.</div></div></div>
+        <div class="item-actions"><button class="btn primary" type="submit">${editing ? "Зберегти нову версію" : "Додати до бібліотеки"}</button>${editing ? '<button class="btn secondary" type="button" data-action="cancel-edit-exercise-template">Скасувати</button>' : ""}</div>
       </form>
     `;
   }
@@ -1347,7 +1682,7 @@
   }
 
   function renderExerciseLibraryItem(template) {
-    return `<div class="item"><div><p class="item-title">${escape(template.title)}</p><div class="meta">${escape(exerciseKindLabel(template.kind))} · ${template.kind === "wordwall" ? "зовнішня вправа" : `${exerciseItems(template).length} завдань`} · створено ${escape(formatDateTime(template.created_at))}</div>${template.prompt ? `<div class="exercise-prompt">${escape(template.prompt)}</div>` : ""}${template.kind === "wordwall" && safeWordwallUrl(template.content?.url) ? `<a class="exercise-link" href="${escapeAttr(safeWordwallUrl(template.content?.url))}" target="_blank" rel="noopener">Відкрити Wordwall</a>` : ""}</div><span class="exercise-kind-badge">${escape(exerciseKindLabel(template.kind))}</span></div>`;
+    return `<div class="item"><div><p class="item-title">${escape(template.title)}</p><div class="meta">${escape(exerciseKindLabel(template.kind))} · ${template.kind === "wordwall" ? "зовнішня вправа" : `${exerciseItems(template).length} завдань`} · створено ${escape(formatDateTime(template.created_at))}</div>${template.prompt ? `<div class="exercise-prompt">${escape(template.prompt)}</div>` : ""}${template.kind === "wordwall" && safeWordwallUrl(template.content?.url) ? `<a class="exercise-link" href="${escapeAttr(safeWordwallUrl(template.content?.url))}" target="_blank" rel="noopener">Відкрити Wordwall</a>` : ""}</div><div class="item-actions"><span class="exercise-kind-badge">${escape(exerciseKindLabel(template.kind))}</span><button class="btn small secondary" type="button" data-action="edit-exercise-template" data-template-id="${escapeAttr(template.id)}">Редагувати</button></div></div>`;
   }
 
   function renderStudentView() {
@@ -1365,6 +1700,7 @@
     const overdue = tasks.filter((task) => { const homework = homeworkById(task.homework_id); return homework?.deadline_at && homework.deadline_at < new Date().toISOString() && task.status === "not_started"; });
     return `
       <div class="page-heading"><div><p class="eyebrow">Мій день</p><h1>Навчальний план</h1><p class="muted">Уроки, домашні та коментарі викладача в одному місці.</p></div></div>
+      ${renderStudentConditions()}
       <div class="metric-grid">${metricCard("Уроків сьогодні", todayLessons.length, "перевір календар")}${metricCard("Активні домашні", pendingTasks.length, "потрібна дія")}${metricCard("Прострочено", overdue.length, "варто здати")}${metricCard("Матеріали", state.data.attachments.length, "доступних файлів")}</div>
       <div class="work-grid"><div class="card"><h2>Сьогодні</h2>${renderLessonFeed(todayLessons)}</div><div class="card"><h2>Потрібно зробити</h2>${renderStudentTaskFeed(pendingTasks.slice(0, 6))}</div></div>
       <div class="card"><h2>Найближчі 7 днів</h2>${renderLessonFeed(nextLessons(8, lessons))}</div>
@@ -1375,6 +1711,7 @@
     const lessons = myLessons();
     return `
       <div class="page-heading"><div><p class="eyebrow">Розклад</p><h1>Мій календар</h1><p class="muted">Статус уроку встановлює викладач. Ти бачиш усі зміни одразу.</p></div></div>
+      ${renderGoogleCalendarConnection()}
       <div class="calendar-workspace"><div class="card calendar-column"><div class="calendar-actions"><h2>Календар</h2><button class="btn small secondary" data-action="calendar-today">Сьогодні</button></div>${renderCalendar(lessons)}</div><div class="card day-column"><h2>${formatDate(state.selectedDate)}</h2>${renderLessonCards(dayLessons(lessons), false)}</div></div>
     `;
   }
@@ -1386,6 +1723,15 @@
       ${renderStudentHomeworkFilters()}
       <div class="list">${tasks.map((item) => renderStudentHomeworkCard(item)).join("") || empty("Домашніх завдань поки немає.")}</div>
     `;
+  }
+
+  function renderStudentConditions() {
+    if (!state.studentConditionsAvailable) return "";
+    const conditions = state.data.schoolStudentConditions[0];
+    if (!conditions?.body?.trim()) return "";
+    const acknowledgement = state.data.conditionAcknowledgements.find((item) => item.student_id === state.session.user.id);
+    const acknowledged = acknowledgement?.conditions_version === conditions.version;
+    return `<section class="card student-conditions"><div class="item-head"><div><p class="eyebrow">Важлива інформація</p><h2>Умови навчання</h2></div><span class="${acknowledged ? "role-badge role-student" : "exercise-kind-badge"}">${acknowledged ? "Ознайомлено" : "Потрібне підтвердження"}</span></div><div class="conditions-text">${escape(conditions.body).replace(/\n/g, "<br>")}</div><div class="item-actions"><button class="btn ${acknowledged ? "secondary" : "primary"}" type="button" data-action="acknowledge-student-conditions" ${acknowledged ? "disabled" : ""}>${acknowledged ? "Ознайомлений/а" : "Ознайомлений/а"}</button>${acknowledged ? `<span class="meta">Підтверджено ${escape(formatDateTime(acknowledgement.acknowledged_at))}</span>` : ""}</div></section>`;
   }
 
 
@@ -1488,7 +1834,7 @@
       const submissions = visibleSubmissionsFor(recipient.id);
       const canReview = recipient.status !== "not_started" || hasHomeworkActivity(recipient.id);
       const feedbackForm = `<form id="feedbackForm" class="stack" style="margin-top:8px;"><input type="hidden" name="homeworkStudentId" value="${recipient.id}" /><div class="two-fields"><div class="field"><label>Статус</label><select name="status" required><option value="reviewed">Перевірено</option><option value="needs_revision">На доопрацювання</option></select></div><div class="field"><label>Оцінка <span class="field-optional">(необов’язково)</span></label><input name="grade" placeholder="Наприклад, 11/12" value="${escapeAttr(recipient.grade || "")}" /></div></div><div class="field"><label>Коментар <span class="field-optional">(необов’язково)</span></label><textarea name="comment">${escape(recipient.teacher_comment || "")}</textarea></div>${renderVoiceCapture(`feedback-${recipient.id}`, "Голосовий коментар")}${renderVideoCapture(`feedback-video-${recipient.id}`, "Відеокоментар")}<div class="field"><label>Виправлений файл <span class="field-optional">(необов’язково)</span></label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn small secondary" type="submit">Надіслати зворотний зв’язок</button></form>`;
-      return `<div class="item"><p class="item-title">${escape(homeworkReviewLabel(task, recipient))}</p><div class="meta">Статус: ${submissionLabel(recipient.status)}${recipient.grade ? " · оцінка: " + escape(recipient.grade) : ""}</div>${submissions.map((submission) => `<div class="filebox"><div>${escape(submission.body || "Файли без тексту")}</div>${renderAttachments({ submission_id: submission.id })}</div>`).join("")}${renderTeacherHomeworkExercises(recipient)}${recipient.teacher_comment ? `<div class="meta">Мій коментар: ${escape(recipient.teacher_comment)}</div>` : ""}${canReview ? feedbackForm : '<div class="meta">Учень ще не надіслав роботу.</div>'}</div>`;
+      return `<details class="item homework-review-item"><summary class="homework-card-summary"><div><p class="item-title">${escape(homeworkReviewLabel(task, recipient))}</p><div class="meta">Статус: ${submissionLabel(recipient.status)}${recipient.grade ? " · оцінка: " + escape(recipient.grade) : ""}</div></div><div class="homework-summary-actions">${submissionBadge(recipient.status)}<span class="details-toggle" aria-hidden="true">Розгорнути</span></div></summary><div class="homework-card-content">${task.description?.trim() ? `<div class="homework-text"><strong>Текст завдання</strong><p>${escape(task.description)}</p></div>` : ""}${renderAttachments({ homework_id: task.id })}${submissions.map((submission) => `<div class="filebox"><div>${escape(submission.body || "Файли без тексту")}</div>${renderAttachments({ submission_id: submission.id })}</div>`).join("")}${renderTeacherHomeworkExercises(recipient)}${recipient.teacher_comment ? `<div class="meta">Мій коментар: ${escape(recipient.teacher_comment)}</div>` : ""}${canReview ? feedbackForm : '<div class="meta">Учень ще не надіслав роботу.</div>'}</div></details>`;
     }).join("") : empty("За цими фільтрами домашніх завдань немає.")}</div>`;
   }
 
@@ -1496,7 +1842,7 @@
     const rows = tasks.flatMap((task) => transferredArchiveRecipients(task).map((recipient) => ({ task, recipient })));
     return `<div class="list">${rows.map(({ task, recipient }) => {
       const submissions = visibleSubmissionsFor(recipient.id);
-      return `<div class="item"><p class="item-title">${escape(homeworkReviewLabel(task, recipient))}</p><div class="meta">Статус: ${submissionLabel(recipient.status)}${recipient.grade ? " · оцінка: " + escape(recipient.grade) : ""}</div>${task.description?.trim() ? `<div class="filebox"><strong>Текст завдання</strong><div>${escape(task.description)}</div>${renderAttachments({ homework_id: task.id })}</div>` : renderAttachments({ homework_id: task.id })}${submissions.map((submission) => `<div class="filebox"><div>${escape(submission.body || "Файли без тексту")}</div>${renderAttachments({ submission_id: submission.id })}</div>`).join("")}${renderTeacherHomeworkExercises(recipient)}${recipient.teacher_comment ? `<div class="meta">Коментар попереднього викладача: ${escape(recipient.teacher_comment)}</div>` : ""}${renderAttachments({ homework_student_id: recipient.id })}</div>`;
+      return `<details class="item homework-review-item"><summary class="homework-card-summary"><div><p class="item-title">${escape(homeworkReviewLabel(task, recipient))}</p><div class="meta">Статус: ${submissionLabel(recipient.status)}${recipient.grade ? " · оцінка: " + escape(recipient.grade) : ""}</div></div><div class="homework-summary-actions">${submissionBadge(recipient.status)}<span class="details-toggle" aria-hidden="true">Розгорнути</span></div></summary><div class="homework-card-content">${task.description?.trim() ? `<div class="filebox"><strong>Текст завдання</strong><div>${escape(task.description)}</div>${renderAttachments({ homework_id: task.id })}</div>` : renderAttachments({ homework_id: task.id })}${submissions.map((submission) => `<div class="filebox"><div>${escape(submission.body || "Файли без тексту")}</div>${renderAttachments({ submission_id: submission.id })}</div>`).join("")}${renderTeacherHomeworkExercises(recipient)}${recipient.teacher_comment ? `<div class="meta">Коментар попереднього викладача: ${escape(recipient.teacher_comment)}</div>` : ""}${renderAttachments({ homework_student_id: recipient.id })}</div></details>`;
     }).join("") || empty("У переданому архіві немає домашніх завдань.")}</div>`;
   }
 
@@ -1560,15 +1906,17 @@
     if (!task) return "";
     const submissions = visibleSubmissionsFor(recipient.id);
     return `
-      <article class="card homework-card">
-        <div class="item-head"><div><p class="eyebrow">${task.deadline_at ? "Дедлайн: " + escape(formatDateTime(task.deadline_at)) : "Без дедлайну"}</p><h2>Домашнє завдання</h2></div>${submissionBadge(recipient.status)}</div>
+      <details class="card homework-card">
+        <summary class="homework-card-summary"><div><p class="eyebrow">${task.deadline_at ? "Дедлайн: " + escape(formatDateTime(task.deadline_at)) : "Без дедлайну"}</p><h2>Домашнє завдання</h2></div><div class="homework-summary-actions">${submissionBadge(recipient.status)}<span class="details-toggle" aria-hidden="true">Розгорнути</span></div></summary>
+        <div class="homework-card-content">
         ${task.description?.trim() ? `<div class="homework-text"><strong>Текст</strong><p>${escape(task.description)}</p></div>` : ""}
         ${renderAttachments({ homework_id: task.id })}
         ${renderHomeworkExercises(recipient)}
         ${recipient.teacher_comment ? `<div class="feedback-box"><strong>Коментар викладача</strong><div>${escape(recipient.teacher_comment)}</div>${recipient.grade ? `<div>Оцінка: ${escape(recipient.grade)}</div>` : ""}${renderAttachments({ homework_student_id: recipient.id })}</div>` : ""}
         ${submissions.length ? `<div class="filebox"><strong>Мої відповіді</strong>${submissions.map((submission) => `<div class="meta">${escape(formatDateTime(submission.submitted_at))}: ${escape(submission.body || "Файли")}${renderAttachments({ submission_id: submission.id })}</div>`).join("")}</div>` : ""}
         <form id="submitHomeworkForm" class="stack" style="margin-top:12px;"><input type="hidden" name="homeworkStudentId" value="${recipient.id}" /><div class="field"><label>Моя відповідь <span class="field-optional">(необов’язково)</span></label><textarea name="body" placeholder="Опиши розв’язання або додай посилання"></textarea></div>${renderVoiceCapture(`submission-${recipient.id}`, "Голосова відповідь")}${renderVideoCapture(`submission-video-${recipient.id}`, "Відеовідповідь")}<div class="field"><label>Файли відповіді <span class="field-optional">(необов’язково)</span></label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn primary" type="submit">Надіслати відповідь</button></form>
-      </article>
+        </div>
+      </details>
     `;
   }
 
@@ -2074,6 +2422,11 @@
   function setLoading(loading) {
     state.loading = loading;
     document.body.classList.toggle("is-loading", loading);
+    const overlay = document.querySelector("[data-loading-overlay]");
+    if (overlay) {
+      overlay.classList.toggle("is-visible", loading);
+      overlay.setAttribute("aria-hidden", loading ? "false" : "true");
+    }
   }
 
   function value(form, name) {
@@ -2155,6 +2508,10 @@
 
   function exerciseTemplateById(id) {
     return state.data.exerciseTemplates.find((template) => template.id === id) || null;
+  }
+
+  function exerciseAnswerKey(templateId) {
+    return state.data.exerciseTemplateAnswers.find((answer) => answer.template_id === templateId) || null;
   }
 
   function ownExerciseGroups() {
@@ -2456,17 +2813,6 @@
     return (source || state.data.lessons).filter((lesson) => lesson.starts_at >= now).sort((a, b) => a.starts_at.localeCompare(b.starts_at)).slice(0, limit);
   }
 
-  function freeSlots(lessons) {
-    const free = [];
-    for (let hour = 8; hour < 20; hour += 1) {
-      const slotStart = new Date(`${state.selectedDate}T${String(hour).padStart(2, "0")}:00:00`);
-      const slotEnd = new Date(slotStart.getTime() + 60 * 60 * 1000);
-      const occupied = lessons.some((lesson) => new Date(lesson.starts_at) < slotEnd && new Date(lesson.ends_at) > slotStart);
-      if (!occupied) free.push(`${String(hour).padStart(2, "0")}:00–${String(hour + 1).padStart(2, "0")}:00`);
-    }
-    return free;
-  }
-
   function walletBalances() {
     return state.data.ledger.filter((row) => row.status === "confirmed").reduce((result, row) => {
       if (!result[row.student_id]) result[row.student_id] = { balance: 0, paid: 0, spent: 0 };
@@ -2524,13 +2870,14 @@
     const profile = state.data.studentInternalProfiles.find((item) => item.student_id === studentId) || {};
     const notes = state.data.studentInternalNotes.filter((item) => item.student_id === studentId);
     return `
-      <section class="card student-internal-card">
+      <div class="modal-backdrop" role="presentation"><section class="card student-internal-card student-card-modal" role="dialog" aria-modal="true" aria-label="Картка учня ${escapeAttr(student.full_name)}">
         <div class="item-head"><div><p class="eyebrow">Лише для команди</p><h2>Картка учня: ${escape(student.full_name)}</h2><p class="muted">Ці відомості й нотатки недоступні учню.</p></div><button class="btn small secondary" type="button" data-action="close-student-card">Закрити</button></div>
         <form id="studentInternalCardForm" class="student-internal-form"><input type="hidden" name="studentId" value="${escapeAttr(studentId)}" />
           <div class="work-grid compact-grid">
           <div class="stack">
             <div class="field"><label>Мета навчання</label><textarea name="goal" placeholder="Наприклад: вільно говорити англійською для роботи">${escape(profile.goal || "")}</textarea></div>
             <div class="two-fields"><div class="field"><label>Рівень на старті</label><input name="startingLevel" value="${escapeAttr(profile.starting_level || "")}" placeholder="Наприклад: A2" /></div><div class="field"><label>Поточний рівень</label><input name="currentLevel" value="${escapeAttr(profile.current_level || "")}" placeholder="Наприклад: B1" /></div></div>
+            ${renderStudentTopicProgressPreview(studentId)}
           </div>
           <div class="stack"><div><h3>Внутрішні нотатки</h3><p class="muted">Видно лише адміністраторам і викладачам цього учня.</p></div>
             <div class="field"><label>Нова нотатка <span class="field-optional">(необов’язково)</span></label><textarea name="body" maxlength="4000" placeholder="Спостереження, домовленість, наступний крок"></textarea></div>
@@ -2540,8 +2887,41 @@
           <button class="btn primary" type="submit">Зберегти картку та нотатку</button>
         </form>
         ${state.activeRole === "admin" ? renderStudentStatistics(studentId) : ""}
-      </section>
+      </section></div>
     `;
+  }
+
+  function renderStudentTopicProgressPreview(studentId) {
+    if (!state.studentTopicsAvailable) return `<div class="filebox"><strong>Прогрес тем</strong><div class="meta">Виконай нову SQL-міграцію, щоб додати ієрархію тем.</div></div>`;
+    const topics = studentTopics(studentId);
+    const completed = topics.filter((topic) => topic.is_completed).length;
+    return `<section class="topic-progress-preview"><div><strong>Прогрес тем</strong><div class="meta">Пройдено: ${completed}/${topics.length || 0}</div></div><button class="btn small secondary" type="button" data-action="open-student-topic-progress" data-student-id="${escapeAttr(studentId)}">Відкрити прогрес</button></section>`;
+  }
+
+  function renderStudentTopicProgress(studentId) {
+    const student = state.data.profiles.find((profile) => profile.id === studentId);
+    if (!student || !canManageStudentCard(studentId)) return "";
+    const topics = studentTopics(studentId);
+    return `<div class="modal-backdrop topic-modal-backdrop" role="presentation"><section class="card topic-progress-modal" role="dialog" aria-modal="true" aria-label="Прогрес тем ${escapeAttr(student.full_name)}"><div class="item-head"><div><p class="eyebrow">Прогрес навчання</p><h2>${escape(student.full_name)}</h2><p class="muted">Створи тему, додай підтеми та позначай пройдене.</p></div><button class="btn small secondary" type="button" data-action="close-student-topic-progress">Закрити</button></div><form id="createStudentTopicForm" class="topic-create-form"><input type="hidden" name="studentId" value="${escapeAttr(studentId)}" /><div class="field"><label>Нова тема</label><input name="title" maxlength="200" required placeholder="Наприклад, Present Simple" /></div><div class="field"><label>Всередині теми <span class="field-optional">(необов’язково)</span></label><select name="parentId"><option value="">Верхній рівень</option>${topicParentOptions(topics).map((topic) => `<option value="${escapeAttr(topic.id)}">${escape(topic.label)}</option>`).join("")}</select></div><button class="btn primary" type="submit">Додати</button></form><div class="topic-tree">${renderTopicBranch(topics, null) || empty("Поки тем немає. Додай першу тему вище.")}</div></section></div>`;
+  }
+
+  function studentTopics(studentId) {
+    return state.data.studentTopicNodes.filter((topic) => topic.student_id === studentId);
+  }
+
+  function topicParentOptions(topics, parentId = null, depth = 0) {
+    return topics
+      .filter((topic) => (topic.parent_id || null) === parentId)
+      .sort((left, right) => left.sort_order - right.sort_order || left.created_at.localeCompare(right.created_at))
+      .flatMap((topic) => [{ ...topic, label: `${"— ".repeat(depth)}${topic.title}` }, ...topicParentOptions(topics, topic.id, depth + 1)]);
+  }
+
+  function renderTopicBranch(topics, parentId) {
+    const children = topics
+      .filter((topic) => (topic.parent_id || null) === parentId)
+      .sort((left, right) => left.sort_order - right.sort_order || left.created_at.localeCompare(right.created_at));
+    if (!children.length) return "";
+    return `<ul>${children.map((topic) => `<li><div class="topic-row"><label><input type="checkbox" data-student-topic-checkbox data-topic-id="${escapeAttr(topic.id)}" ${topic.is_completed ? "checked" : ""} /><span class="${topic.is_completed ? "is-completed" : ""}">${escape(topic.title)}</span></label><div class="item-actions"><button class="btn small secondary" type="button" data-action="rename-student-topic" data-topic-id="${escapeAttr(topic.id)}" data-topic-title="${escapeAttr(topic.title)}">Змінити</button><button class="btn small danger" type="button" data-action="delete-student-topic" data-topic-id="${escapeAttr(topic.id)}">Видалити</button></div></div>${renderTopicBranch(topics, topic.id)}</li>`).join("")}</ul>`;
   }
 
   function renderStudentStatistics(studentId) {
