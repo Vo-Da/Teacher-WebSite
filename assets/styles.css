@@ -1990,6 +1990,10 @@ select[multiple] {
   white-space: normal;
 }
 
+.student-conditions .item-actions {
+  justify-content: flex-start;
+}
+
 .homework-card,
 .homework-review-item {
   padding: 0;
