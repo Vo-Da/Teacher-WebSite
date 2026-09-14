@@ -20,6 +20,7 @@
     selectedStudentId: null,
     homeworkFilters: { studentStatus: "all", teacherStatus: "all", teacherStudentId: "all" },
     exerciseGroupsAvailable: true,
+    packagePaymentsAvailable: true,
     teacherTransfersAvailable: true,
     studentConditionsAvailable: true,
     sharedTopicsAvailable: true,
@@ -72,6 +73,7 @@
       schoolTopicNodes: [],
       studentTopicProgress: [],
       exerciseTemplateAnswers: [],
+      paymentCredits: [],
       ledger: []
     };
   }
@@ -114,6 +116,7 @@
     state.canBootstrapSchool = false;
     state.data = emptyData();
     state.exerciseGroupsAvailable = true;
+    state.packagePaymentsAvailable = true;
     state.teacherTransfersAvailable = true;
     state.studentConditionsAvailable = true;
     state.sharedTopicsAvailable = true;
@@ -247,14 +250,16 @@
     state.data.attachments = await selectRows("file_attachments", (q) => q.eq("school_id", schoolId).order("created_at", { ascending: false }));
 
     if (canAdminister) {
-      const [requests, rates, ledger] = await Promise.all([
+      const [requests, rates, ledger, paymentCredits] = await Promise.all([
         selectRows("registration_requests", (q) => q.eq("status", "pending").order("created_at")),
         selectRows("student_rates", (q) => q.eq("school_id", schoolId).order("active_from", { ascending: false })),
-        selectRows("wallet_ledger", (q) => q.eq("school_id", schoolId).order("created_at", { ascending: false }))
+        selectRows("wallet_ledger", (q) => q.eq("school_id", schoolId).order("created_at", { ascending: false })),
+        selectOptionalRows("student_payment_credits", (q) => q.eq("school_id", schoolId).order("paid_at").order("created_at"), "packagePaymentsAvailable")
       ]);
       state.data.requests = requests;
       state.data.rates = rates;
       state.data.ledger = ledger;
+      state.data.paymentCredits = paymentCredits;
     }
     state.googleCalendar = await googleCalendarStatus();
   }
@@ -694,6 +699,11 @@
 
   function handleChange(event) {
     const input = event.target;
+    if (input.form?.id === "recordPaymentForm" && ["studentId", "rateId", "paymentDate", "lessonCount"].includes(input.name)) {
+      if (input.name === "studentId" || input.name === "paymentDate") syncPaymentRateOptions(input.form);
+      refreshPaymentPreview(input.form);
+      return;
+    }
     if (input.matches?.("[data-homework-filter]")) {
       state.homeworkFilters[input.dataset.homeworkFilter] = input.value || "all";
       renderDashboard();
@@ -729,6 +739,10 @@
 
   function handleInput(event) {
     const input = event.target;
+    if (input.form?.id === "recordPaymentForm" && input.name === "amount") {
+      refreshPaymentPreview(input.form);
+      return;
+    }
     if (!input.matches?.("[data-exercise-template-search]")) return;
     const picker = input.closest("[data-exercise-template-picker]");
     if (!picker) return;
@@ -950,14 +964,19 @@
 
   async function createRate(form) {
     const price = wholeUah(value(form, "lessonPrice"));
-    const payout = wholeUah(value(form, "teacherPayout"));
+    const packagePrice = wholeUah(value(form, "packageLessonPrice"));
+    const payoutPercent = Number(value(form, "teacherPayoutPercent"));
+    if (!Number.isFinite(payoutPercent) || payoutPercent < 0 || payoutPercent > 100) {
+      throw new Error("Виплата викладачу має бути від 0 до 100 відсотків.");
+    }
     const { error } = await state.client.from("student_rates").insert({
       school_id: state.school.id,
       student_id: value(form, "studentId"),
       teacher_id: value(form, "teacherId") || null,
       subject_id: value(form, "subjectId") || null,
       lesson_price_uah: price,
-      teacher_payout_uah: payout,
+      package_lesson_price_uah: packagePrice,
+      teacher_payout_percent: payoutPercent,
       active_from: value(form, "activeFrom") || isoDate(new Date())
     });
     if (error) throw error;
@@ -1028,20 +1047,28 @@
   }
 
   async function recordPayment(form) {
+    if (!state.packagePaymentsAvailable) {
+      throw new Error("Спершу виконай SQL-оновлення для пакетних оплат у Supabase.");
+    }
     const amount = wholeUah(value(form, "amount"));
     if (amount <= 0) throw new Error("Сума оплати має бути більшою за нуль.");
-    const { error } = await state.client.from("wallet_ledger").insert({
-      school_id: state.school.id,
-      student_id: value(form, "studentId"),
-      teacher_id: null,
-      kind: "payment",
-      amount_uah: amount,
-      teacher_payout_uah: 0,
-      note: value(form, "note"),
-      created_by: state.session.user.id
+    const lessonCount = Number(value(form, "lessonCount"));
+    if (!Number.isSafeInteger(lessonCount) || lessonCount <= 0) {
+      throw new Error("Вкажи цілу кількість оплачених занять.");
+    }
+    const rateId = value(form, "rateId");
+    if (!rateId) throw new Error("Обери тариф, за яким зараховується оплата.");
+    const { error } = await state.client.rpc("record_student_payment", {
+      p_school_id: state.school.id,
+      p_student_id: value(form, "studentId"),
+      p_rate_id: rateId,
+      p_amount_uah: amount,
+      p_paid_at: value(form, "paymentDate"),
+      p_lesson_count: lessonCount,
+      p_note: value(form, "note")
     });
     if (error) throw error;
-    state.notice = success("Оплату внесено у фінансовий журнал.");
+    state.notice = success("Оплату внесено, а оплачені заняття зафіксовано за тарифом на дату платежу.");
     await refreshContext();
   }
 
@@ -1573,19 +1600,20 @@
     const teachers = activeMembers("teacher");
     const students = activeMembers("student");
     return `
-      <div class="page-heading"><div><p class="eyebrow">Навчання і тарифи</p><h1>Предмети та ціни</h1><p class="muted">Ціна для учня і виплата викладачу зберігаються окремо.</p></div></div>
+      <div class="page-heading"><div><p class="eyebrow">Навчання і тарифи</p><h1>Предмети та ціни</h1><p class="muted">Для кожного тарифу вкажи разову та пакетну ціну, а виплату викладачу - у відсотках.</p></div></div>
       <div class="work-grid">
         <div class="card"><h2>Новий предмет</h2><form id="createSubjectForm" class="stack"><div class="field"><label>Назва</label><input name="name" placeholder="Наприклад, Математика" required /></div><div class="field"><label>Колір у календарі</label><input name="color" type="color" value="#0f766e" /></div><div class="field"><label>Тривалість, хв</label><input name="duration" type="number" min="15" max="240" value="60" /></div><button class="btn primary" type="submit">Додати предмет</button></form></div>
         <div class="card"><h2>Новий тариф</h2><form id="createRateForm" class="stack">
           ${selectField("studentId", "Учень", students, true)}
           ${selectField("teacherId", "Викладач", teachers, false, "")}
           ${subjectSelect("subjectId", "Предмет", false, "")}
-          <div class="two-fields"><div class="field"><label>Ціна уроку, грн</label><input name="lessonPrice" type="number" min="0" step="1" required /></div><div class="field"><label>Виплата викладачу, грн</label><input name="teacherPayout" type="number" min="0" step="1" required /></div></div>
+          <div class="two-fields"><div class="field"><label>Ціна заняття, грн</label><input name="lessonPrice" type="number" min="0" step="1" required /></div><div class="field"><label>Пакетна ціна за заняття, грн</label><input name="packageLessonPrice" type="number" min="0" step="1" required /></div></div>
+          <div class="field"><label>Виплата викладачу, %</label><input name="teacherPayoutPercent" type="number" min="0" max="100" step="0.01" required /></div>
           <div class="field"><label>Діє з</label><input name="activeFrom" type="date" value="${isoDate(new Date())}" required /></div><button class="btn primary" type="submit">Зберегти тариф</button>
         </form></div>
       </div>
       <div class="card"><h2>Предмети</h2><div class="chip-row">${state.data.subjects.map((item) => `<span class="subject-chip"><i style="background:${escapeAttr(item.color)}"></i>${escape(item.name)} · ${item.default_duration_minutes} хв</span>`).join("") || empty("Спочатку додай хоча б один предмет.")}</div></div>
-      <div class="card"><h2>Історія тарифів</h2><div class="list">${state.data.rates.map((rate) => `<div class="item"><div class="item-head"><div><p class="item-title">${escape(nameOf(rate.student_id))}</p><div class="meta">${escape(rate.teacher_id ? nameOf(rate.teacher_id) : "Усі викладачі")} · ${escape(rate.subject_id ? subjectName(rate.subject_id) : "Усі предмети")}</div></div><strong>${money(rate.lesson_price_uah)} / виплата ${money(rate.teacher_payout_uah)}</strong></div></div>`).join("") || empty("Тарифів ще немає.")}</div></div>
+      <div class="card"><h2>Історія тарифів</h2><div class="list">${state.data.rates.map((rate) => `<div class="item"><div class="item-head"><div><p class="item-title">${escape(nameOf(rate.student_id))}</p><div class="meta">${escape(rate.teacher_id ? nameOf(rate.teacher_id) : "Усі викладачі")} · ${escape(rate.subject_id ? subjectName(rate.subject_id) : "Усі предмети")} · діє з ${escape(rate.active_from)}</div></div><strong>Разово ${money(rate.lesson_price_uah)} · пакет ${money(ratePackagePrice(rate))} · викладачу ${formatPercent(ratePayoutPercent(rate))}</strong></div></div>`).join("") || empty("Тарифів ще немає.")}</div></div>
     `;
   }
 
@@ -1594,7 +1622,7 @@
     const teacherDaily = teacherDailyTotals();
     return `
       <div class="page-heading"><div><p class="eyebrow">Фінанси</p><h1>Гаманці та виплати</h1><p class="muted">Баланс обчислюється тільки з журналу операцій.</p></div></div>
-      <div class="work-grid"><div class="card"><h2>Баланс учнів</h2><div class="list">${activeMembers("student").map((student) => { const entry = balances[student.user_id] || { balance: 0, paid: 0, spent: 0 }; return `<div class="item"><div class="item-head"><div><p class="item-title">${escape(nameOf(student.user_id))}</p><div class="meta">Оплачено ${money(entry.paid)} · списано ${money(entry.spent)}</div></div><strong class="${entry.balance < 0 ? "amount-negative" : "amount-positive"}">${money(entry.balance)}</strong></div></div>`; }).join("") || empty("Немає учнів.")}</div></div>
+      <div class="work-grid"><div class="card"><h2>Баланс учнів</h2><div class="list">${activeMembers("student").map((student) => { const entry = balances[student.user_id] || { balance: 0, paid: 0, spent: 0 }; const credits = paymentCreditSummary(student.user_id); return `<div class="item"><div class="item-head"><div><p class="item-title">${escape(nameOf(student.user_id))}</p><div class="meta">Оплачено ${money(entry.paid)} · списано ${money(entry.spent)} · заброньовано ${money(credits.reservedUah)}${credits.remainingLessons ? ` · залишилось ${credits.remainingLessons} занять` : ""}</div></div><strong class="${credits.availableUah < 0 ? "amount-negative" : "amount-positive"}">${money(credits.availableUah)} вільно</strong></div></div>`; }).join("") || empty("Немає учнів.")}</div></div>
       <div class="card"><h2>Виплати викладачам за днями</h2><div class="list">${teacherDaily.map((row) => `<div class="item"><div class="item-head"><div><p class="item-title">${escape(row.date)} · ${escape(nameOf(row.teacherId))}</p><div class="meta">За проведені або платно скасовані уроки</div></div><strong>${money(row.total)}</strong></div></div>`).join("") || empty("Ще немає нарахувань.")}</div></div></div>
       <div class="card"><h2>Останні операції</h2><div class="list">${state.data.ledger.slice(0, 30).map((row) => `<div class="item"><div class="item-head"><div><p class="item-title">${escape(nameOf(row.student_id))} · ${ledgerLabel(row.kind)}</p><div class="meta">${formatDateTime(row.created_at)} · ${escape(row.note || "Без коментаря")}</div></div><strong class="${row.amount_uah >= 0 ? "amount-positive" : "amount-negative"}">${signedMoney(row.amount_uah)}</strong></div></div>`).join("") || empty("Операцій ще немає.")}</div></div>
     `;
@@ -1602,10 +1630,12 @@
 
   function renderAdminPayments() {
     const students = activeMembers("student");
+    const rateOptions = state.data.rates.map((rate) => `<option value="${escapeAttr(rate.id)}" data-student-id="${escapeAttr(rate.student_id)}" data-active-from="${escapeAttr(rate.active_from)}" data-active-to="${escapeAttr(rate.active_to || "")}">${escape(paymentRateLabel(rate))}</option>`).join("");
+    const migrationMessage = state.packagePaymentsAvailable ? "" : '<div class="msg error">Для пакетних оплат потрібно виконати SQL-оновлення в Supabase.</div>';
     return `
-      <div class="page-heading"><div><p class="eyebrow">Оплати</p><h1>Зафіксувати оплату</h1><p class="muted">Обери учня, який вніс оплату. Запис одразу потрапить до фінансового журналу.</p></div></div>
-      <div class="work-grid"><div class="card"><h2>Нова оплата</h2><form id="recordPaymentForm" class="stack">${selectField("studentId", "Учень", students, true)}<div class="field"><label>Сума, грн</label><input name="amount" type="number" step="1" min="1" required /></div><div class="field"><label>Коментар</label><textarea name="note" placeholder="Наприклад: оплата за вересень готівкою"></textarea></div><button class="btn primary" type="submit">Внести оплату</button></form></div><div class="card"><h2>Що відбувається після збереження</h2><div class="process-note"><strong>1.</strong> Оплата додається до фінансового журналу.<br><strong>2.</strong> Баланс учня оновлюється одразу.<br><strong>3.</strong> Проведені уроки списуються автоматично за встановленим тарифом.</div></div></div>
-      <div class="card"><h2>Останні оплати</h2><div class="list">${state.data.ledger.filter((row) => row.kind === "payment").slice(0, 20).map((row) => `<div class="item"><div><p class="item-title">${escape(nameOf(row.student_id))}</p><div class="meta">${formatDateTime(row.created_at)} · ${escape(row.note || "Без коментаря")}</div></div><strong class="amount-positive">${signedMoney(row.amount_uah)}</strong></div>`).join("") || empty("Оплат ще немає.")}</div></div>
+      <div class="page-heading"><div><p class="eyebrow">Оплати</p><h1>Зафіксувати оплату</h1><p class="muted">Фактична дата визначає тариф. Пакет застосовується автоматично від 8 занять.</p></div></div>
+      <div class="work-grid"><div class="card"><h2>Нова оплата</h2>${migrationMessage}<form id="recordPaymentForm" class="stack">${selectField("studentId", "Учень", students, true)}<div class="field"><label>Тариф</label><select name="rateId" required><option value="" selected hidden>Обери тариф</option>${rateOptions}</select><small>Обирай тариф учня, чинний на фактичну дату оплати.</small></div><div class="two-fields"><div class="field"><label>Фактична дата оплати</label><input name="paymentDate" type="date" max="${isoDate(new Date())}" value="${isoDate(new Date())}" required /></div><div class="field"><label>Кількість оплачених занять</label><input name="lessonCount" type="number" min="1" step="1" required /></div></div><div class="field"><label>Сума, грн</label><input name="amount" type="number" step="1" min="1" required /></div><div class="payment-preview muted" data-payment-preview>Обери учня, тариф і кількість занять, щоб побачити розрахунок.</div><div class="field"><label>Коментар</label><textarea name="note" placeholder="Наприклад: оплата за вересень готівкою"></textarea></div><button class="btn primary" type="submit" ${state.packagePaymentsAvailable ? "" : "disabled"}>Внести оплату</button></form></div><div class="card"><h2>Як працює залишок</h2><div class="process-note"><strong>1.</strong> Від 8 занять застосовується пакетна ціна, менше - разова.<br><strong>2.</strong> Повна сума обраних занять резервується одразу.<br><strong>3.</strong> Нерозподілений залишок додається до наступної оплати.<br><strong>4.</strong> Проведені уроки списуються з найстарішого відповідного пакета.</div></div></div>
+      <div class="card"><h2>Останні оплати</h2><div class="list">${state.data.ledger.filter((row) => row.kind === "payment").slice(0, 20).map((row) => `<div class="item"><div><p class="item-title">${escape(nameOf(row.student_id))}</p><div class="meta">Фактично ${escape(row.payment_date || row.created_at.slice(0, 10))}${row.paid_lesson_count ? ` · ${row.paid_lesson_count} занять` : ""} · ${escape(row.note || "Без коментаря")}</div></div><strong class="amount-positive">${signedMoney(row.amount_uah)}</strong></div>`).join("") || empty("Оплат ще немає.")}</div></div>
     `;
   }
 
@@ -2843,6 +2873,82 @@
       if (row.amount_uah < 0) item.spent += Math.abs(row.amount_uah);
       return result;
     }, {});
+  }
+
+  function ratePackagePrice(rate) {
+    return Number(rate?.package_lesson_price_uah ?? rate?.lesson_price_uah ?? 0);
+  }
+
+  function ratePayoutPercent(rate) {
+    if (rate?.teacher_payout_percent !== null && rate?.teacher_payout_percent !== undefined) return Number(rate.teacher_payout_percent);
+    const lessonPrice = Number(rate?.lesson_price_uah || 0);
+    return lessonPrice > 0 ? (Number(rate?.teacher_payout_uah || 0) * 100) / lessonPrice : 0;
+  }
+
+  function formatPercent(value) {
+    return `${new Intl.NumberFormat("uk-UA", { maximumFractionDigits: 2 }).format(Number(value) || 0)}%`;
+  }
+
+  function paymentRateLabel(rate) {
+    const scope = `${rate.teacher_id ? nameOf(rate.teacher_id) : "Усі викладачі"} · ${rate.subject_id ? subjectName(rate.subject_id) : "Усі предмети"}`;
+    return `${nameOf(rate.student_id)} · ${scope} · пакет ${money(ratePackagePrice(rate))}, разово ${money(rate.lesson_price_uah)} · з ${rate.active_from}`;
+  }
+
+  function paymentCreditSummary(studentId) {
+    const balance = walletBalances()[studentId]?.balance || 0;
+    const credits = state.data.paymentCredits.filter((credit) => credit.student_id === studentId);
+    const reservedUah = credits.reduce((sum, credit) => sum + (Number(credit.remaining_lesson_count) * Number(credit.unit_price_uah)), 0);
+    const remainingLessons = credits.reduce((sum, credit) => sum + Number(credit.remaining_lesson_count), 0);
+    return { reservedUah, remainingLessons, availableUah: balance - reservedUah };
+  }
+
+  function refreshPaymentPreview(form) {
+    const preview = form.querySelector("[data-payment-preview]");
+    if (!preview) return;
+    const studentId = value(form, "studentId");
+    const rate = state.data.rates.find((item) => item.id === value(form, "rateId"));
+    const lessonCount = Number(value(form, "lessonCount"));
+    const paidAmount = Number(value(form, "amount")) || 0;
+    if (!studentId || !rate || !Number.isSafeInteger(lessonCount) || lessonCount <= 0) {
+      preview.textContent = "Обери учня, тариф і кількість занять, щоб побачити розрахунок.";
+      return;
+    }
+    const isPackage = lessonCount >= 8;
+    const unitPrice = isPackage ? ratePackagePrice(rate) : Number(rate.lesson_price_uah);
+    const required = unitPrice * lessonCount;
+    const available = paymentCreditSummary(studentId).availableUah;
+    const total = available + paidAmount;
+    const remaining = total - required;
+    const actualDate = value(form, "paymentDate");
+    const rateIsCurrent = actualDate && rate.active_from <= actualDate && (!rate.active_to || rate.active_to >= actualDate);
+    if (!rateIsCurrent) {
+      preview.textContent = "Обраний тариф не діє на вказану фактичну дату. Обери тариф з відповідного періоду.";
+      return;
+    }
+    if (remaining < 0) {
+      preview.textContent = `${isPackage ? "Пакетна" : "Разова"} ціна: ${money(unitPrice)} за заняття. Потрібно ${money(required)}; після оплати бракуватиме ${money(Math.abs(remaining))}.`;
+      return;
+    }
+    preview.textContent = `${isPackage ? "Пакетна" : "Разова"} ціна: ${money(unitPrice)} за заняття. Резервуємо ${money(required)} за ${lessonCount} занять.${available ? ` Поточний вільний залишок: ${money(available)}.` : ""}${remaining ? ` Після збереження залишиться ${money(remaining)}.` : ""}`;
+  }
+
+  function syncPaymentRateOptions(form) {
+    const studentId = value(form, "studentId");
+    const paymentDate = value(form, "paymentDate");
+    const rateSelect = form.elements.rateId;
+    if (!rateSelect) return;
+    const matchingOptions = Array.from(rateSelect.options).filter((option) => {
+      if (!option.value) return false;
+      const isCurrent = option.dataset.studentId === studentId
+        && option.dataset.activeFrom <= paymentDate
+        && (!option.dataset.activeTo || option.dataset.activeTo >= paymentDate);
+      option.hidden = !isCurrent;
+      option.disabled = !isCurrent;
+      return isCurrent;
+    });
+    if (!matchingOptions.some((option) => option.value === rateSelect.value)) {
+      rateSelect.value = matchingOptions.length === 1 ? matchingOptions[0].value : "";
+    }
   }
 
   function teacherDailyTotals() {
