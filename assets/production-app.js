@@ -699,8 +699,7 @@
 
   function handleChange(event) {
     const input = event.target;
-    if (input.form?.id === "recordPaymentForm" && ["studentId", "rateId", "paymentDate", "lessonCount"].includes(input.name)) {
-      if (input.name === "studentId" || input.name === "paymentDate") syncPaymentRateOptions(input.form);
+    if (input.form?.id === "recordPaymentForm" && ["studentId", "paymentDate", "lessonCount"].includes(input.name)) {
       refreshPaymentPreview(input.form);
       return;
     }
@@ -1056,12 +1055,9 @@
     if (!Number.isSafeInteger(lessonCount) || lessonCount <= 0) {
       throw new Error("Вкажи цілу кількість оплачених занять.");
     }
-    const rateId = value(form, "rateId");
-    if (!rateId) throw new Error("Обери тариф, за яким зараховується оплата.");
     const { error } = await state.client.rpc("record_student_payment", {
       p_school_id: state.school.id,
       p_student_id: value(form, "studentId"),
-      p_rate_id: rateId,
       p_amount_uah: amount,
       p_paid_at: value(form, "paymentDate"),
       p_lesson_count: lessonCount,
@@ -1630,11 +1626,10 @@
 
   function renderAdminPayments() {
     const students = activeMembers("student");
-    const rateOptions = state.data.rates.map((rate) => `<option value="${escapeAttr(rate.id)}" data-student-id="${escapeAttr(rate.student_id)}" data-active-from="${escapeAttr(rate.active_from)}" data-active-to="${escapeAttr(rate.active_to || "")}">${escape(paymentRateLabel(rate))}</option>`).join("");
     const migrationMessage = state.packagePaymentsAvailable ? "" : '<div class="msg error">Для пакетних оплат потрібно виконати SQL-оновлення в Supabase.</div>';
     return `
       <div class="page-heading"><div><p class="eyebrow">Оплати</p><h1>Зафіксувати оплату</h1><p class="muted">Фактична дата визначає тариф. Пакет застосовується автоматично від 8 занять.</p></div></div>
-      <div class="work-grid"><div class="card"><h2>Нова оплата</h2>${migrationMessage}<form id="recordPaymentForm" class="stack">${selectField("studentId", "Учень", students, true)}<div class="field"><label>Тариф</label><select name="rateId" required><option value="" selected hidden>Обери тариф</option>${rateOptions}</select><small>Обирай тариф учня, чинний на фактичну дату оплати.</small></div><div class="two-fields"><div class="field"><label>Фактична дата оплати</label><input name="paymentDate" type="date" max="${isoDate(new Date())}" value="${isoDate(new Date())}" required /></div><div class="field"><label>Кількість оплачених занять</label><input name="lessonCount" type="number" min="1" step="1" required /></div></div><div class="field"><label>Сума, грн</label><input name="amount" type="number" step="1" min="1" required /></div><div class="payment-preview muted" data-payment-preview>Обери учня, тариф і кількість занять, щоб побачити розрахунок.</div><div class="field"><label>Коментар</label><textarea name="note" placeholder="Наприклад: оплата за вересень готівкою"></textarea></div><button class="btn primary" type="submit" ${state.packagePaymentsAvailable ? "" : "disabled"}>Внести оплату</button></form></div><div class="card"><h2>Як працює залишок</h2><div class="process-note"><strong>1.</strong> Від 8 занять застосовується пакетна ціна, менше - разова.<br><strong>2.</strong> Повна сума обраних занять резервується одразу.<br><strong>3.</strong> Нерозподілений залишок додається до наступної оплати.<br><strong>4.</strong> Проведені уроки списуються з найстарішого відповідного пакета.</div></div></div>
+      <div class="work-grid"><div class="card"><h2>Нова оплата</h2>${migrationMessage}<form id="recordPaymentForm" class="stack">${selectField("studentId", "Учень", students, true)}<div class="two-fields"><div class="field"><label>Фактична дата оплати</label><input name="paymentDate" type="date" max="${isoDate(new Date())}" value="${isoDate(new Date())}" required /></div><div class="field"><label>Кількість оплачених занять</label><input name="lessonCount" type="number" min="1" step="1" required /></div></div><div class="field"><label>Сума, грн</label><input name="amount" type="number" step="1" min="1" required /></div><div class="payment-preview muted" data-payment-preview>Обери учня, фактичну дату й кількість занять, щоб побачити розрахунок.</div><div class="field"><label>Коментар</label><textarea name="note" placeholder="Наприклад: оплата за вересень готівкою"></textarea></div><button class="btn primary" type="submit" ${state.packagePaymentsAvailable ? "" : "disabled"}>Внести оплату</button></form></div><div class="card"><h2>Як працює залишок</h2><div class="process-note"><strong>1.</strong> Від 8 занять застосовується пакетна ціна, менше - разова.<br><strong>2.</strong> Система автоматично бере тариф, чинний на фактичну дату оплати.<br><strong>3.</strong> Повна сума обраних занять резервується одразу, а залишок додається до наступної оплати.<br><strong>4.</strong> Проведені уроки списуються з найстарішого відповідного пакета.</div></div></div>
       <div class="card"><h2>Останні оплати</h2><div class="list">${state.data.ledger.filter((row) => row.kind === "payment").slice(0, 20).map((row) => `<div class="item"><div><p class="item-title">${escape(nameOf(row.student_id))}</p><div class="meta">Фактично ${escape(row.payment_date || row.created_at.slice(0, 10))}${row.paid_lesson_count ? ` · ${row.paid_lesson_count} занять` : ""} · ${escape(row.note || "Без коментаря")}</div></div><strong class="amount-positive">${signedMoney(row.amount_uah)}</strong></div>`).join("") || empty("Оплат ще немає.")}</div></div>
     `;
   }
@@ -2889,11 +2884,6 @@
     return `${new Intl.NumberFormat("uk-UA", { maximumFractionDigits: 2 }).format(Number(value) || 0)}%`;
   }
 
-  function paymentRateLabel(rate) {
-    const scope = `${rate.teacher_id ? nameOf(rate.teacher_id) : "Усі викладачі"} · ${rate.subject_id ? subjectName(rate.subject_id) : "Усі предмети"}`;
-    return `${nameOf(rate.student_id)} · ${scope} · пакет ${money(ratePackagePrice(rate))}, разово ${money(rate.lesson_price_uah)} · з ${rate.active_from}`;
-  }
-
   function paymentCreditSummary(studentId) {
     const balance = walletBalances()[studentId]?.balance || 0;
     const credits = state.data.paymentCredits.filter((credit) => credit.student_id === studentId);
@@ -2906,11 +2896,12 @@
     const preview = form.querySelector("[data-payment-preview]");
     if (!preview) return;
     const studentId = value(form, "studentId");
-    const rate = state.data.rates.find((item) => item.id === value(form, "rateId"));
+    const paymentDate = value(form, "paymentDate");
+    const rate = paymentRateFor(studentId, paymentDate);
     const lessonCount = Number(value(form, "lessonCount"));
     const paidAmount = Number(value(form, "amount")) || 0;
     if (!studentId || !rate || !Number.isSafeInteger(lessonCount) || lessonCount <= 0) {
-      preview.textContent = "Обери учня, тариф і кількість занять, щоб побачити розрахунок.";
+      preview.textContent = "Обери учня, фактичну дату й кількість занять, щоб побачити розрахунок.";
       return;
     }
     const isPackage = lessonCount >= 8;
@@ -2919,36 +2910,23 @@
     const available = paymentCreditSummary(studentId).availableUah;
     const total = available + paidAmount;
     const remaining = total - required;
-    const actualDate = value(form, "paymentDate");
-    const rateIsCurrent = actualDate && rate.active_from <= actualDate && (!rate.active_to || rate.active_to >= actualDate);
-    if (!rateIsCurrent) {
-      preview.textContent = "Обраний тариф не діє на вказану фактичну дату. Обери тариф з відповідного періоду.";
-      return;
-    }
     if (remaining < 0) {
-      preview.textContent = `${isPackage ? "Пакетна" : "Разова"} ціна: ${money(unitPrice)} за заняття. Потрібно ${money(required)}; після оплати бракуватиме ${money(Math.abs(remaining))}.`;
+      preview.textContent = `Тариф від ${rate.active_from}: ${isPackage ? "пакетна" : "разова"} ціна ${money(unitPrice)} за заняття. Потрібно ${money(required)}; після оплати бракуватиме ${money(Math.abs(remaining))}.`;
       return;
     }
-    preview.textContent = `${isPackage ? "Пакетна" : "Разова"} ціна: ${money(unitPrice)} за заняття. Резервуємо ${money(required)} за ${lessonCount} занять.${available ? ` Поточний вільний залишок: ${money(available)}.` : ""}${remaining ? ` Після збереження залишиться ${money(remaining)}.` : ""}`;
+    preview.textContent = `Тариф від ${rate.active_from}: ${isPackage ? "пакетна" : "разова"} ціна ${money(unitPrice)} за заняття. Резервуємо ${money(required)} за ${lessonCount} занять.${available ? ` Поточний вільний залишок: ${money(available)}.` : ""}${remaining ? ` Після збереження залишиться ${money(remaining)}.` : ""}`;
   }
 
-  function syncPaymentRateOptions(form) {
-    const studentId = value(form, "studentId");
-    const paymentDate = value(form, "paymentDate");
-    const rateSelect = form.elements.rateId;
-    if (!rateSelect) return;
-    const matchingOptions = Array.from(rateSelect.options).filter((option) => {
-      if (!option.value) return false;
-      const isCurrent = option.dataset.studentId === studentId
-        && option.dataset.activeFrom <= paymentDate
-        && (!option.dataset.activeTo || option.dataset.activeTo >= paymentDate);
-      option.hidden = !isCurrent;
-      option.disabled = !isCurrent;
-      return isCurrent;
-    });
-    if (!matchingOptions.some((option) => option.value === rateSelect.value)) {
-      rateSelect.value = matchingOptions.length === 1 ? matchingOptions[0].value : "";
-    }
+  function paymentRateFor(studentId, paymentDate) {
+    return state.data.rates
+      .filter((rate) => rate.student_id === studentId && rate.active_from <= paymentDate && (!rate.active_to || rate.active_to >= paymentDate))
+      .sort((left, right) => right.active_from.localeCompare(left.active_from)
+        || paymentRateScope(left) - paymentRateScope(right)
+        || String(right.created_at || "").localeCompare(String(left.created_at || "")))[0] || null;
+  }
+
+  function paymentRateScope(rate) {
+    return Number(Boolean(rate.teacher_id)) + Number(Boolean(rate.subject_id));
   }
 
   function teacherDailyTotals() {

@@ -86,10 +86,11 @@ create policy "payment_credits_admin_read" on public.student_payment_credits
 -- prevents a browser request from issuing paid lessons without full funding.
 drop policy if exists "wallet_admin_manage" on public.wallet_ledger;
 
+drop function if exists public.record_student_payment(uuid, uuid, uuid, integer, date, integer, text);
+
 create or replace function public.record_student_payment(
   p_school_id uuid,
   p_student_id uuid,
-  p_rate_id uuid,
   p_amount_uah integer,
   p_paid_at date,
   p_lesson_count integer,
@@ -120,13 +121,18 @@ begin
 
   select * into v_rate
   from public.student_rates sr
-  where sr.id = p_rate_id
-    and sr.school_id = p_school_id
+  where sr.school_id = p_school_id
     and sr.student_id = p_student_id
     and sr.active_from <= p_paid_at
     and (sr.active_to is null or sr.active_to >= p_paid_at)
+  -- Payment is student-wide, so a general rate takes priority over a rate
+  -- restricted to a teacher or subject when both begin on the same date.
+  order by sr.active_from desc,
+    ((sr.teacher_id is not null)::integer + (sr.subject_id is not null)::integer) asc,
+    sr.created_at desc
+  limit 1
   for share;
-  if not found then raise exception 'No selected rate is active on the payment date'; end if;
+  if not found then raise exception 'No rate is active on the payment date'; end if;
 
   v_tariff_kind := case when p_lesson_count >= 8 then 'package' else 'single' end;
   v_unit_price := case when v_tariff_kind = 'package' then v_rate.package_lesson_price_uah else v_rate.lesson_price_uah end;
@@ -200,8 +206,8 @@ begin
         and (credit.teacher_id is null or credit.teacher_id = v_lesson.teacher_id)
         and (credit.subject_id is null or credit.subject_id = v_lesson.subject_id)
       order by (credit.teacher_id is not null) desc, (credit.subject_id is not null) desc, credit.paid_at, credit.created_at
-      for update skip locked
-      limit 1;
+      limit 1
+      for update skip locked;
 
       if found then
         update public.student_payment_credits
@@ -306,6 +312,6 @@ begin
 end;
 $$;
 
-grant execute on function public.record_student_payment(uuid, uuid, uuid, integer, date, integer, text) to authenticated;
+grant execute on function public.record_student_payment(uuid, uuid, integer, date, integer, text) to authenticated;
 
 commit;
