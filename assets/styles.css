@@ -1952,18 +1952,41 @@ select[multiple] {
 }
 
 .loading-horse {
+  position: relative;
   width: 72px;
   height: 96px;
   display: block;
-  background: url("./running-horse-sprite.png") 0 0 / 400% 100% no-repeat;
   filter: drop-shadow(0 8px 10px rgba(4, 24, 34, 0.28));
-  animation: horse-gallop 0.64s steps(1, end) infinite, horse-bounce 0.64s ease-in-out infinite;
+  animation: horse-bounce 0.72s ease-in-out infinite;
 }
 
-@keyframes horse-gallop {
-  /* The first and third source frames keep all four hooves distinct. */
-  0%, 49.99% { background-position: 0 0; }
-  50%, 100% { background-position: 66.667% 0; }
+.loading-horse-frame {
+  position: absolute;
+  inset: 0;
+  display: block;
+  opacity: 0;
+  background: url("./running-horse-sprite.png") 0 0 / 400% 100% no-repeat;
+  animation: horse-frame 0.72s steps(1, end) infinite;
+}
+
+.loading-horse-frame:nth-child(2) {
+  background-position: 33.333% 0;
+  animation-delay: 0.18s;
+}
+
+.loading-horse-frame:nth-child(3) {
+  background-position: 66.667% 0;
+  animation-delay: 0.36s;
+}
+
+.loading-horse-frame:nth-child(4) {
+  background-position: 100% 0;
+  animation-delay: 0.54s;
+}
+
+@keyframes horse-frame {
+  0%, 24.99% { opacity: 1; }
+  25%, 100% { opacity: 0; }
 }
 
 @keyframes horse-bounce {
@@ -1974,6 +1997,14 @@ select[multiple] {
 @media (prefers-reduced-motion: reduce) {
   .loading-horse {
     animation: none;
+  }
+
+  .loading-horse-frame {
+    animation: none;
+  }
+
+  .loading-horse-frame:first-child {
+    opacity: 1;
   }
 }
 

@@ -417,7 +417,7 @@
   }
 
   function shell(content) {
-    return `<main class="production-app">${content}<div class="loading-overlay${state.loading ? " is-visible" : ""}" data-loading-overlay aria-live="polite" aria-hidden="${state.loading ? "false" : "true"}"><span class="loading-horse" aria-hidden="true"></span><span>Завантажуємо...</span></div></main>`;
+    return `<main class="production-app">${content}<div class="loading-overlay${state.loading ? " is-visible" : ""}" data-loading-overlay aria-live="polite" aria-hidden="${state.loading ? "false" : "true"}"><span class="loading-horse" aria-hidden="true"><span class="loading-horse-frame"></span><span class="loading-horse-frame"></span><span class="loading-horse-frame"></span><span class="loading-horse-frame"></span></span><span>Завантажуємо...</span></div></main>`;
   }
 
   async function handleClick(event) {
