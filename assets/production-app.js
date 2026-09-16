@@ -434,7 +434,13 @@
   }
 
   function shell(content) {
-    return `<main class="production-app">${content}<div class="loading-overlay${state.loading ? " is-visible" : ""}" data-loading-overlay aria-live="polite" aria-hidden="${state.loading ? "false" : "true"}"><span class="loading-horse" aria-hidden="true"><span class="loading-horse-sprite"></span></span><span>Завантажуємо...</span></div></main>`;
+    return `<main class="production-app">${content}<div class="loading-overlay${state.loading ? " is-visible" : ""}" data-loading-overlay aria-live="polite" aria-hidden="${state.loading ? "false" : "true"}">${loadingIndicatorMarkup()}<span>Завантажуємо...</span></div></main>`;
+  }
+
+  function loadingIndicatorMarkup() {
+    // Horse loading: <span class="loading-horse" aria-hidden="true"></span>
+    // Horse loading with background: <span class="loading-horse" aria-hidden="true"><span class="loading-horse-sprite"></span></span>
+    return `<span class="loading-spinner" aria-hidden="true"></span>`;
   }
 
   async function handleClick(event) {

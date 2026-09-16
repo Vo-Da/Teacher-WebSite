@@ -1951,6 +1951,18 @@ select[multiple] {
   display: grid;
 }
 
+/* Horse loading
+.loading-horse {
+  width: 72px;
+  height: 96px;
+  display: block;
+  background: url("./running-horse-sprite.png") 0 0 / 400% 100% no-repeat;
+  filter: drop-shadow(0 3px 3px rgba(3, 30, 38, 0.3));
+  animation: horse-gallop 0.92s steps(1, end) infinite;
+}
+*/
+
+/* Horse loading with background
 .loading-horse {
   position: relative;
   width: 176px;
@@ -1977,10 +1989,6 @@ select[multiple] {
   transform: translateX(-50%);
 }
 
-.loading-horse::after {
-  display: none;
-}
-
 .loading-horse-sprite {
   position: relative;
   z-index: 1;
@@ -1991,27 +1999,35 @@ select[multiple] {
   filter: drop-shadow(0 3px 3px rgba(3, 30, 38, 0.3));
   animation: horse-gallop 0.92s steps(1, end) infinite;
 }
+*/
 
+/* Shared animation for the two horse loading variants above.
 @keyframes horse-gallop {
   0%, 24.99% { background-position: 0 0; }
   25%, 49.99% { background-position: 33.333% 0; }
   50%, 74.99% { background-position: 66.667% 0; }
   75%, 100% { background-position: 100% 0; }
 }
+*/
+
+.loading-spinner {
+  width: 38px;
+  height: 38px;
+  border: 4px solid rgba(255, 255, 255, 0.36);
+  border-top-color: #fff;
+  border-radius: 50%;
+  box-sizing: border-box;
+  filter: drop-shadow(0 2px 3px rgba(3, 30, 38, 0.24));
+  animation: loading-spin 0.82s linear infinite;
+}
+
+@keyframes loading-spin {
+  to { transform: rotate(360deg); }
+}
 
 @media (prefers-reduced-motion: reduce) {
-  .loading-horse {
-    background-image: none;
-    background-color: #117273;
-  }
-
-  .loading-horse-sprite {
+  .loading-spinner {
     animation: none;
-  }
-
-  .loading-horse::before,
-  .loading-horse::after {
-    display: none;
   }
 }
 
