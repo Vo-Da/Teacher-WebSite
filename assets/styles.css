@@ -1957,7 +1957,7 @@ select[multiple] {
   display: block;
   background: url("./running-horse-sprite.png") 0 0 / 400% 100% no-repeat;
   filter: drop-shadow(0 8px 10px rgba(4, 24, 34, 0.28));
-  animation: horse-gallop 0.64s linear infinite, horse-bounce 0.64s ease-in-out infinite;
+  animation: horse-gallop 0.72s steps(1, end) infinite, horse-bounce 0.72s ease-in-out infinite;
 }
 
 @keyframes horse-gallop {
