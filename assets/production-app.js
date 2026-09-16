@@ -7,6 +7,8 @@
     documentBytes: 3 * 1024 * 1024
   });
   const root = document.getElementById("appRoot");
+  let loadingHorseAnimationId = null;
+  let loadingHorseStartedAt = 0;
   const state = {
     client: null,
     session: null,
@@ -2531,6 +2533,36 @@
       overlay.classList.toggle("is-visible", loading);
       overlay.setAttribute("aria-hidden", loading ? "false" : "true");
     }
+    if (loading) startLoadingHorseAnimation();
+    else stopLoadingHorseAnimation();
+  }
+
+  function setLoadingHorseFrame(index) {
+    document.querySelectorAll(".loading-horse-frame").forEach((frame, frameIndex) => {
+      frame.classList.toggle("is-active", frameIndex === index);
+    });
+  }
+
+  function stopLoadingHorseAnimation() {
+    if (loadingHorseAnimationId !== null) window.cancelAnimationFrame(loadingHorseAnimationId);
+    loadingHorseAnimationId = null;
+  }
+
+  function startLoadingHorseAnimation() {
+    stopLoadingHorseAnimation();
+    loadingHorseStartedAt = 0;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setLoadingHorseFrame(0);
+      return;
+    }
+    const advance = (timestamp) => {
+      if (!state.loading) return;
+      if (!loadingHorseStartedAt) loadingHorseStartedAt = timestamp;
+      const frameIndex = Math.floor((timestamp - loadingHorseStartedAt) / 180) % 4;
+      setLoadingHorseFrame(frameIndex);
+      loadingHorseAnimationId = window.requestAnimationFrame(advance);
+    };
+    loadingHorseAnimationId = window.requestAnimationFrame(advance);
   }
 
   function value(form, name) {
