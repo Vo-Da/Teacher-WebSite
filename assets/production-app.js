@@ -2,6 +2,10 @@
   "use strict";
 
   const config = window.TEACHER_PORTAL_CONFIG || {};
+  const FILE_STORAGE_LIMITS = Object.freeze({
+    schoolStorageBytes: 800 * 1024 * 1024,
+    documentBytes: 3 * 1024 * 1024
+  });
   const root = document.getElementById("appRoot");
   const state = {
     client: null,
@@ -768,6 +772,7 @@
     const form = event.target;
     if (!form.id) return;
     event.preventDefault();
+    clearFormError(form);
     if (form.id === "createExerciseTemplateForm") saveExerciseDraft(form);
     setLoading(true);
     try {
@@ -796,6 +801,10 @@
       if (form.id === "adminCreateUserForm") await createAdminUser(form);
       if (form.id === "updateAdminUserForm") await updateAdminUser(form);
     } catch (error) {
+      if (error?.keepForm) {
+        showFormError(form, friendlyError(error));
+        return;
+      }
       state.notice = failure(friendlyError(error));
       renderCurrent();
     } finally {
@@ -1011,6 +1020,7 @@
     const lessonId = value(form, "lessonId");
     const status = value(form, "status");
     if (!status) throw new Error("Обери статус заняття.");
+    validateUploadFiles(form, '[name="lessonFiles"], [data-recorded-media][data-capture-target="lesson"]');
 
     const { error } = await state.client.rpc("set_lesson_status", {
       p_lesson_id: lessonId,
@@ -1030,6 +1040,7 @@
     const studentIds = selectedLesson ? lessonStudents(selectedLesson.id).map((row) => row.student_id) : values(form, "studentIds");
     const exerciseTemplateIds = values(form, "exerciseTemplateIds");
     if (!studentIds.length) throw new Error("Обери заняття або хоча б одного учня для домашнього завдання.");
+    validateUploadFiles(form);
     const { data, error } = await state.client.rpc("create_homework", {
       p_school_id: state.school.id,
       p_lesson_id: lessonId,
@@ -1073,6 +1084,7 @@
     if (!value(form, "body") && !hasSelectedFiles(form)) {
       throw new Error("Додай текст, файл, аудіо або відео перед надсиланням відповіді.");
     }
+    validateUploadFiles(form);
     const { data, error } = await state.client.rpc("submit_homework", {
       p_homework_student_id: homeworkStudentId,
       p_body: value(form, "body")
@@ -1086,6 +1098,7 @@
   async function sendFeedback(form) {
     const homeworkStudentId = value(form, "homeworkStudentId");
     const status = value(form, "status");
+    validateUploadFiles(form);
     const { error } = await state.client.from("homework_students").update({
       status,
       teacher_comment: value(form, "comment"),
@@ -1532,6 +1545,8 @@
     const totalBalance = Object.values(balances).reduce((sum, item) => sum + item.balance, 0);
     const month = monthKey(new Date());
     const chargedThisMonth = state.data.ledger.filter((row) => row.kind === "lesson_charge" && row.created_at.startsWith(month) && row.status === "confirmed").reduce((sum, row) => sum + Math.abs(row.amount_uah), 0);
+    const storedFileBytes = state.data.attachments.reduce((sum, file) => sum + Number(file.byte_size || 0), 0);
+    const remainingFileBytes = Math.max(0, FILE_STORAGE_LIMITS.schoolStorageBytes - storedFileBytes);
     return `
       <div class="page-heading"><div><p class="eyebrow">Адміністрування</p><h1>Огляд школи</h1><p class="muted">Ключові показники без зайвої бухгалтерії.</p></div></div>
       <div class="metric-grid">
@@ -1540,6 +1555,7 @@
         ${metricCard("Заявки", state.data.requests.length, "Очікують рішення")}
         ${metricCard("Баланс учнів", money(totalBalance), "Сумарний передплачений баланс")}
         ${metricCard("Списано цього місяця", money(chargedThisMonth), "Проведені та платні скасування")}
+        ${metricCard("Файлове сховище", `${formatBytes(storedFileBytes)} / 800 МБ`, `Залишилось ${formatBytes(remainingFileBytes)}`)}
       </div>
       <div class="card"><h2>Найближчі заняття</h2>${renderLessonFeed(nextLessons(8))}</div>
       ${renderAdminStudentConditions()}
@@ -1806,7 +1822,7 @@
         <form id="lessonCardForm" class="stack" style="margin-top:12px;"><input type="hidden" name="lessonId" value="${lesson.id}" />
           <div class="field"><label>Статус</label><select name="status" required>${lessonStatusOptions(lesson.status)}</select></div>
           <div class="field"><label>Нотатки викладача <span class="field-optional">(необов’язково)</span></label><textarea name="teacherNote" placeholder="Що пройшли, що повторити наступного разу">${escape(lesson.teacher_note || "")}</textarea></div><div class="media-capture-row">${renderVoiceCapture(`lesson-note-${lesson.id}`, "Голосова нотатка", "lesson")}${renderVideoCapture(`lesson-note-video-${lesson.id}`, "Відеонотатка", "lesson")}</div>
-          <div class="filebox stack"><strong>Матеріали до уроку <span class="field-optional">(необов’язково)</span></strong><input name="lessonFiles" type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.docx" /></div>
+          <div class="filebox stack"><strong>Матеріали до уроку <span class="field-optional">(необов’язково)</span></strong><input name="lessonFiles" type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.docx" />${renderUploadLimitNote()}</div>
           <button class="btn primary" type="submit">Зберегти картку заняття</button>
         </form>
         ${renderLessonHomeworkPreview(lessonTasks)}
@@ -1835,7 +1851,7 @@
         ${selectField("studentIds", "Учні (лише якщо без заняття)", students.map((student) => ({ user_id: student.id })), false, null, true)}
         ${templates.length ? renderHomeworkExercisePicker(templates) : ""}
         ${renderVoiceCapture(`homework-${selected?.id || "new"}`, "Голосова інструкція")}${renderVideoCapture(`homework-video-${selected?.id || "new"}`, "Відеоінструкція")}
-        <div class="field"><label>Вкладення <span class="field-optional">(необов’язково)</span></label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn primary" type="submit">Опублікувати</button>
+        <div class="field"><label>Вкладення <span class="field-optional">(необов’язково)</span></label><input name="files" type="file" multiple accept="${supportedFileAccept()}" />${renderUploadLimitNote()}</div><button class="btn primary" type="submit">Опублікувати</button>
       </form>
     `;
   }
@@ -1879,7 +1895,7 @@
     return `<div class="list">${rows.length ? rows.map(({ task, recipient }) => {
       const submissions = visibleSubmissionsFor(recipient.id);
       const canReview = recipient.status !== "not_started" || hasHomeworkActivity(recipient.id);
-      const feedbackForm = `<form id="feedbackForm" class="stack" style="margin-top:8px;"><input type="hidden" name="homeworkStudentId" value="${recipient.id}" /><div class="two-fields"><div class="field"><label>Статус</label><select name="status" required><option value="reviewed">Перевірено</option><option value="needs_revision">На доопрацювання</option></select></div><div class="field"><label>Оцінка <span class="field-optional">(необов’язково)</span></label><input name="grade" placeholder="Наприклад, 11/12" value="${escapeAttr(recipient.grade || "")}" /></div></div><div class="field"><label>Коментар <span class="field-optional">(необов’язково)</span></label><textarea name="comment">${escape(recipient.teacher_comment || "")}</textarea></div>${renderVoiceCapture(`feedback-${recipient.id}`, "Голосовий коментар")}${renderVideoCapture(`feedback-video-${recipient.id}`, "Відеокоментар")}<div class="field"><label>Виправлений файл <span class="field-optional">(необов’язково)</span></label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn small secondary" type="submit">Надіслати зворотний зв’язок</button></form>`;
+      const feedbackForm = `<form id="feedbackForm" class="stack" style="margin-top:8px;"><input type="hidden" name="homeworkStudentId" value="${recipient.id}" /><div class="two-fields"><div class="field"><label>Статус</label><select name="status" required><option value="reviewed">Перевірено</option><option value="needs_revision">На доопрацювання</option></select></div><div class="field"><label>Оцінка <span class="field-optional">(необов’язково)</span></label><input name="grade" placeholder="Наприклад, 11/12" value="${escapeAttr(recipient.grade || "")}" /></div></div><div class="field"><label>Коментар <span class="field-optional">(необов’язково)</span></label><textarea name="comment">${escape(recipient.teacher_comment || "")}</textarea></div>${renderVoiceCapture(`feedback-${recipient.id}`, "Голосовий коментар")}${renderVideoCapture(`feedback-video-${recipient.id}`, "Відеокоментар")}<div class="field"><label>Виправлений файл <span class="field-optional">(необов’язково)</span></label><input name="files" type="file" multiple accept="${supportedFileAccept()}" />${renderUploadLimitNote()}</div><button class="btn small secondary" type="submit">Надіслати зворотний зв’язок</button></form>`;
       return `<details class="item homework-review-item"><summary class="homework-card-summary"><div><p class="item-title">${escape(homeworkReviewLabel(task, recipient))}</p><div class="meta">Статус: ${submissionLabel(recipient.status)}${recipient.grade ? " · оцінка: " + escape(recipient.grade) : ""}</div></div><div class="homework-summary-actions">${submissionBadge(recipient.status)}<span class="details-toggle" aria-hidden="true">Розгорнути</span></div></summary><div class="homework-card-content">${task.description?.trim() ? `<div class="homework-text"><strong>Текст завдання</strong><p>${escape(task.description)}</p></div>` : ""}${renderAttachments({ homework_id: task.id })}${submissions.map((submission) => `<div class="filebox"><div>${escape(submission.body || "Файли без тексту")}</div>${renderAttachments({ submission_id: submission.id })}</div>`).join("")}${renderTeacherHomeworkExercises(recipient)}${recipient.teacher_comment ? `<div class="meta">Мій коментар: ${escape(recipient.teacher_comment)}</div>` : ""}${canReview ? feedbackForm : '<div class="meta">Учень ще не надіслав роботу.</div>'}</div></details>`;
     }).join("") : empty("За цими фільтрами домашніх завдань немає.")}</div>`;
   }
@@ -1960,7 +1976,7 @@
         ${renderHomeworkExercises(recipient)}
         ${recipient.teacher_comment ? `<div class="feedback-box"><strong>Коментар викладача</strong><div>${escape(recipient.teacher_comment)}</div>${recipient.grade ? `<div>Оцінка: ${escape(recipient.grade)}</div>` : ""}${renderAttachments({ homework_student_id: recipient.id })}</div>` : ""}
         ${submissions.length ? `<div class="filebox"><strong>Мої відповіді</strong>${submissions.map((submission) => `<div class="meta">${escape(formatDateTime(submission.submitted_at))}: ${escape(submission.body || "Файли")}${renderAttachments({ submission_id: submission.id })}</div>`).join("")}</div>` : ""}
-        <form id="submitHomeworkForm" class="stack" style="margin-top:12px;"><input type="hidden" name="homeworkStudentId" value="${recipient.id}" /><div class="field"><label>Моя відповідь <span class="field-optional">(необов’язково)</span></label><textarea name="body" placeholder="Опиши розв’язання або додай посилання"></textarea></div>${renderVoiceCapture(`submission-${recipient.id}`, "Голосова відповідь")}${renderVideoCapture(`submission-video-${recipient.id}`, "Відеовідповідь")}<div class="field"><label>Файли відповіді <span class="field-optional">(необов’язково)</span></label><input name="files" type="file" multiple accept="${supportedFileAccept()}" /></div><button class="btn primary" type="submit">Надіслати відповідь</button></form>
+        <form id="submitHomeworkForm" class="stack" style="margin-top:12px;"><input type="hidden" name="homeworkStudentId" value="${recipient.id}" /><div class="field"><label>Моя відповідь <span class="field-optional">(необов’язково)</span></label><textarea name="body" placeholder="Опиши розв’язання або додай посилання"></textarea></div>${renderVoiceCapture(`submission-${recipient.id}`, "Голосова відповідь")}${renderVideoCapture(`submission-video-${recipient.id}`, "Відеовідповідь")}<div class="field"><label>Файли відповіді <span class="field-optional">(необов’язково)</span></label><input name="files" type="file" multiple accept="${supportedFileAccept()}" />${renderUploadLimitNote()}</div><button class="btn primary" type="submit">Надіслати відповідь</button></form>
         </div>
       </details>
     `;
@@ -2246,6 +2262,10 @@
     return ".pdf,.jpg,.jpeg,.png,.webp,.docx,.webm,.ogg,.mp3,.m4a,.mp4";
   }
 
+  function renderUploadLimitNote() {
+    return '<div class="meta">Документ або зображення - до 3 МБ. Для аудіо й відео додаткового ліміту немає.</div>';
+  }
+
   async function startMediaRecording(trigger) {
     const captureId = trigger.dataset.captureId;
     const capture = trigger.closest("[data-media-capture]");
@@ -2370,6 +2390,7 @@
     const inputs = Array.from(form?.querySelectorAll(selector) || []);
     const files = inputs.flatMap((input) => Array.from(input.files || []));
     if (!files.length) return;
+    validateUploadFiles(form, selector);
     const allowed = new Set([
       "application/pdf",
       "image/jpeg",
@@ -2391,8 +2412,7 @@
       // Storage and our allowed-type list need the base MIME type instead.
       const mimeType = normalizeMimeType(file.type) || mimeTypeForExtension(extension);
       const allowedExtension = ["pdf", "jpg", "jpeg", "png", "webp", "docx", "webm", "ogg", "mp3", "m4a", "mp4"].includes(extension);
-      if (file.size > 50 * 1024 * 1024) throw new Error(`Файл «${file.name}» перевищує ліміт 50 МБ.`);
-      if (!allowedExtension || !allowed.has(mimeType)) throw new Error(`Формат файлу «${file.name}» не підтримується.`);
+      if (!allowedExtension || !allowed.has(mimeType)) throw formInputError(`Формат файлу «${file.name}» не підтримується.`);
 
       const fileName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
       const random = typeof crypto?.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -2420,6 +2440,44 @@
         throw attachmentError;
       }
     }
+  }
+
+  function validateUploadFiles(form, selector = 'input[type="file"]') {
+    const inputs = Array.from(form?.querySelectorAll(selector) || []);
+    const files = inputs.flatMap((input) => Array.from(input.files || []));
+    files.forEach((file) => {
+      const extension = file.name.split(".").pop()?.toLowerCase();
+      const mimeType = normalizeMimeType(file.type) || mimeTypeForExtension(extension);
+      const allowedExtension = ["pdf", "jpg", "jpeg", "png", "webp", "docx", "webm", "ogg", "mp3", "m4a", "mp4"].includes(extension);
+      const allowedMimeType = ["application/pdf", "image/jpeg", "image/png", "image/webp", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "audio/x-m4a", "video/webm", "video/mp4"].includes(mimeType);
+      if (!allowedExtension || !allowedMimeType) {
+        throw formInputError(`Формат файлу «${file.name}» не підтримується.`);
+      }
+      if (mimeType.startsWith("audio/") || mimeType.startsWith("video/")) return;
+      if (file.size > FILE_STORAGE_LIMITS.documentBytes) {
+        throw formInputError(`Файл «${file.name}» перевищує ліміт ${formatBytes(FILE_STORAGE_LIMITS.documentBytes)}.`);
+      }
+    });
+  }
+
+  function formInputError(message) {
+    const error = new Error(message);
+    error.keepForm = true;
+    return error;
+  }
+
+  function clearFormError(form) {
+    form?.querySelector("[data-form-error]")?.remove();
+  }
+
+  function showFormError(form, message) {
+    clearFormError(form);
+    const notice = document.createElement("div");
+    notice.className = "msg error";
+    notice.dataset.formError = "true";
+    notice.textContent = message;
+    form.prepend(notice);
+    notice.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
   function normalizeMimeType(value) {
@@ -3245,6 +3303,7 @@
   }
 
   function formatBytes(bytes) {
+    if (!Number.isFinite(bytes) || bytes <= 0) return "0 МБ";
     if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} КБ`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
   }
@@ -3290,6 +3349,9 @@
     if (text.includes("Admin access required")) return "Структуру навчальної програми може змінювати лише адміністратор.";
     if (text.includes("Student context access denied") || text.includes("Topic access denied")) return "Немає доступу до прогресу цього учня або обраної теми.";
     if (text.includes("Exercise group access denied")) return "Ця група вправ недоступна. Онови сторінку та вибери групу ще раз.";
+    if (text.includes("Documents and images must not exceed 3 MB")) return "Документ або зображення не може бути більшим за 3 МБ.";
+    if (text.includes("School file storage limit of 800 MB has been reached")) return "Файлове сховище школи заповнене. Видали непотрібні вкладення, щоб додати новий файл.";
+    if (text.includes("Invalid file size metadata") || text.includes("Stored file was not found")) return "Не вдалося перевірити розмір завантаженого файлу. Спробуй ще раз.";
     if (text.includes("exercise_groups_school_id_teacher_id_name_key")) return "Група з такою назвою вже є у твоїй бібліотеці.";
     if (text.includes("Only Wordwall assignments can be confirmed")) return "Вручну можна підтвердити лише вправу Wordwall.";
     if (text.includes("overlaps an existing lesson")) return "Цей час перетинається з іншим активним заняттям у твоєму календарі.";
