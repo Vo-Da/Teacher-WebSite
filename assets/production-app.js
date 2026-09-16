@@ -7,8 +7,6 @@
     documentBytes: 3 * 1024 * 1024
   });
   const root = document.getElementById("appRoot");
-  let loadingHorseAnimationId = null;
-  let loadingHorseStartedAt = 0;
   const state = {
     client: null,
     session: null,
@@ -41,7 +39,8 @@
     showPasswordRecoveryRequest: false,
     passwordRecovery: new URLSearchParams(window.location.search).has("password-recovery"),
     notice: null,
-    loading: false
+    loading: false,
+    loadingPreviewUntil: 0
   };
 
   document.addEventListener("click", handleClick);
@@ -106,6 +105,22 @@
       void refreshContext();
     });
     await refreshContext();
+    if (isLoadingPreviewEnabled()) showLoadingPreview();
+  }
+
+  function isLoadingPreviewEnabled() {
+    return window.location.hostname === "localhost"
+      && new URLSearchParams(window.location.search).get("loading-preview") === "1";
+  }
+
+  function showLoadingPreview() {
+    const duration = 20_000;
+    state.loadingPreviewUntil = Date.now() + duration;
+    setLoading(true);
+    window.setTimeout(() => {
+      state.loadingPreviewUntil = 0;
+      setLoading(false);
+    }, duration);
   }
 
   function isConfigured() {
@@ -419,7 +434,7 @@
   }
 
   function shell(content) {
-    return `<main class="production-app">${content}<div class="loading-overlay${state.loading ? " is-visible" : ""}" data-loading-overlay aria-live="polite" aria-hidden="${state.loading ? "false" : "true"}"><span class="loading-horse" aria-hidden="true"><span class="loading-horse-frame"></span><span class="loading-horse-frame"></span><span class="loading-horse-frame"></span><span class="loading-horse-frame"></span></span><span>Завантажуємо...</span></div></main>`;
+    return `<main class="production-app">${content}<div class="loading-overlay${state.loading ? " is-visible" : ""}" data-loading-overlay aria-live="polite" aria-hidden="${state.loading ? "false" : "true"}"><span class="loading-horse" aria-hidden="true"><span class="loading-horse-sprite"></span></span><span>Завантажуємо...</span></div></main>`;
   }
 
   async function handleClick(event) {
@@ -2526,6 +2541,7 @@
   }
 
   function setLoading(loading) {
+    if (!loading && state.loadingPreviewUntil > Date.now()) return;
     state.loading = loading;
     document.body.classList.toggle("is-loading", loading);
     const overlay = document.querySelector("[data-loading-overlay]");
@@ -2533,36 +2549,6 @@
       overlay.classList.toggle("is-visible", loading);
       overlay.setAttribute("aria-hidden", loading ? "false" : "true");
     }
-    if (loading) startLoadingHorseAnimation();
-    else stopLoadingHorseAnimation();
-  }
-
-  function setLoadingHorseFrame(index) {
-    document.querySelectorAll(".loading-horse-frame").forEach((frame, frameIndex) => {
-      frame.classList.toggle("is-active", frameIndex === index);
-    });
-  }
-
-  function stopLoadingHorseAnimation() {
-    if (loadingHorseAnimationId !== null) window.cancelAnimationFrame(loadingHorseAnimationId);
-    loadingHorseAnimationId = null;
-  }
-
-  function startLoadingHorseAnimation() {
-    stopLoadingHorseAnimation();
-    loadingHorseStartedAt = 0;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      setLoadingHorseFrame(0);
-      return;
-    }
-    const advance = (timestamp) => {
-      if (!state.loading) return;
-      if (!loadingHorseStartedAt) loadingHorseStartedAt = timestamp;
-      const frameIndex = Math.floor((timestamp - loadingHorseStartedAt) / 180) % 4;
-      setLoadingHorseFrame(frameIndex);
-      loadingHorseAnimationId = window.requestAnimationFrame(advance);
-    };
-    loadingHorseAnimationId = window.requestAnimationFrame(advance);
   }
 
   function value(form, name) {
