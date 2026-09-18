@@ -338,7 +338,7 @@
     root.innerHTML = shell(`
       <section class="auth-shell">
         <div class="auth-card wide-card">
-          <div class="brand">${brandMark()}<div><div class="brand-title">Teacher Portal</div><div class="brand-sub">Production setup</div></div></div>
+          <div class="brand">${brandMark()}<div><div class="brand-title">Stella Academy</div><div class="brand-sub">Production setup</div></div></div>
           <h1>Потрібне підключення до Supabase</h1>
           <p class="muted">Вкажи URL і publishable/anon key нового staging-проєкту у файлі <code>assets/config.js</code>. Не додавай у браузер <code>service_role</code> key.</p>
           <div class="filebox"><strong>Порядок запуску:</strong><br>1. Запусти <code>supabase/production_schema.sql</code> у SQL Editor.<br>2. Вкажи конфігурацію.<br>3. Створи перший admin-акаунт через форму нижче.</div>
@@ -351,7 +351,7 @@
     root.innerHTML = shell(`
       <section class="auth-shell">
         <div class="auth-card wide-card">
-          <div class="brand">${brandMark()}<div><div class="brand-title">${escape(config.schoolName || "Teacher Portal")}</div><div class="brand-sub">Кабінет школи</div></div></div>
+          <div class="brand">${brandMark()}<div><div class="brand-title">${escape(config.schoolName || "Stella Academy")}</div></div></div>
           ${renderNotice()}
           <div class="auth-columns">
             ${state.showPasswordRecoveryRequest ? `<form id="passwordRecoveryRequestForm" class="stack card plain-card"><div class="auth-login-emblem">${brandMark("auth-login-mark")}</div><h2>Відновити пароль</h2><p class="muted">Вкажи email. Якщо акаунт існує, ми надішлемо безпечне посилання для зміни пароля.</p><div class="field"><label>Email</label><input name="email" type="email" required autocomplete="email" /></div><button class="btn primary" type="submit">Надіслати посилання</button><button class="btn small secondary" type="button" data-action="close-password-recovery">Повернутися до входу</button></form>` : `<form id="loginForm" class="stack card plain-card">
@@ -383,7 +383,7 @@
     root.innerHTML = shell(`
       <section class="auth-shell">
         <div class="auth-card wide-card">
-          <div class="brand">${brandMark()}<div><div class="brand-title">Teacher Portal</div><div class="brand-sub">${escape(userName)}</div></div></div>
+          <div class="brand">${brandMark()}<div><div class="brand-title">Stella Academy</div><div class="brand-sub">${escape(userName)}</div></div></div>
           ${renderNotice()}
           ${request ? `
             <h1>Заявка очікує підтвердження</h1>
@@ -409,7 +409,7 @@
     root.innerHTML = shell(`
       <section class="auth-shell">
         <div class="auth-card">
-          <div class="brand">${brandMark()}<div><div class="brand-title">${escape(config.schoolName || "Teacher Portal")}</div><div class="brand-sub">Відновлення доступу</div></div></div>
+          <div class="brand">${brandMark()}<div><div class="brand-title">${escape(config.schoolName || "Stella Academy")}</div><div class="brand-sub">Відновлення доступу</div></div></div>
           ${renderNotice()}
           <div class="card plain-card">
             <h1>Створи новий пароль</h1>
