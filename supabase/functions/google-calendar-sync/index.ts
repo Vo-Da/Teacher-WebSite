@@ -70,6 +70,35 @@ function callbackUri(supabaseUrl: string) {
   return `${supabaseUrl}/functions/v1/google-calendar-sync`;
 }
 
+const SCHOOL_CALENDAR_NAME = "Stella Academy";
+
+function eventSummary(
+  subjectName: string,
+  lessonTitle: string,
+  calendarOwnerId: string,
+  teacherId: string,
+  studentNames: string[]
+) {
+  const title = lessonTitle.trim();
+  const generatedTitle = `Заняття: ${subjectName}`;
+  const lessonName = !title || title === generatedTitle || title === subjectName
+    ? subjectName
+    : `${subjectName}: ${title}`;
+  if (calendarOwnerId !== teacherId || !studentNames.length) return lessonName;
+  return `${lessonName} · ${studentNames.join(", ")}`;
+}
+
+async function ensureCalendarBrand(connection: Record<string, unknown>, accessToken: string) {
+  if (connection.brandConfirmed === true) return;
+  const calendarId = encodeURIComponent(text(connection.calendar_id));
+  await googleJson(
+    `https://www.googleapis.com/calendar/v3/calendars/${calendarId}`,
+    accessToken,
+    { method: "PATCH", body: JSON.stringify({ summary: SCHOOL_CALENDAR_NAME }) }
+  );
+  connection.brandConfirmed = true;
+}
+
 function htmlPage(title: string, message: string, retry = false) {
   const action = retry ? '<p><a href="https://teacher-web-site.vercel.app/">Повернутися до Stella Academy</a></p>' : "";
   return `<!doctype html><html lang="uk"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><body style="font-family:Arial,sans-serif;background:#f2f5f7;color:#1b2430;padding:48px"><main style="max-width:560px;margin:auto;background:#fff;border-radius:16px;padding:32px"><h1>${title}</h1><p>${message}</p>${action}</main></body></html>`;
@@ -158,7 +187,8 @@ async function syncLessonForConnection(
   connection: Record<string, unknown>,
   lesson: Record<string, unknown>,
   subjectName: string,
-  timezone: string
+  timezone: string,
+  studentNames: string[]
 ) {
   const connectionId = text(connection.id);
   const lessonId = text(lesson.id);
@@ -172,6 +202,7 @@ async function syncLessonForConnection(
 
   const accessToken = await accessTokenForConnection(connection);
   const calendarId = encodeURIComponent(text(connection.calendar_id));
+  await ensureCalendarBrand(connection, accessToken);
   const isCancelled = ["cancelled", "cancelled_paid"].includes(text(lesson.status));
   if (isCancelled) {
     if (existingLink?.google_event_id) {
@@ -188,7 +219,7 @@ async function syncLessonForConnection(
 
   const meetingUrl = text(lesson.meeting_url);
   const event = {
-    summary: `${subjectName}: ${text(lesson.title)}`,
+    summary: eventSummary(subjectName, text(lesson.title), text(connection.user_id), text(lesson.teacher_id), studentNames),
     description: meetingUrl ? `Посилання на заняття: ${meetingUrl}` : "",
     location: text(lesson.location_text),
     start: { dateTime: text(lesson.starts_at), timeZone: timezone },
@@ -236,9 +267,16 @@ async function loadLessonContext(admin: ReturnType<typeof createClient>, lessonI
     admin.from("schools").select("timezone").eq("id", lesson.school_id).maybeSingle()
   ]);
   if (studentsError || subjectError || schoolError) throw new Error("Unable to read lesson data");
+  const studentIds = (students || []).map((row) => text(row.student_id)).filter(Boolean);
+  const { data: profiles, error: profilesError } = studentIds.length
+    ? await admin.from("profiles").select("id, full_name").in("id", studentIds)
+    : { data: [], error: null };
+  if (profilesError) throw profilesError;
+  const namesByStudentId = new Map((profiles || []).map((profile) => [text(profile.id), text(profile.full_name)]));
   return {
     lesson: lesson as Record<string, unknown>,
-    studentIds: (students || []).map((row) => text(row.student_id)).filter(Boolean),
+    studentIds,
+    studentNames: studentIds.map((studentId) => namesByStudentId.get(studentId) || "").filter(Boolean),
     subjectName: text(subject?.name) || "Заняття",
     timezone: text(school?.timezone) || "Europe/Kyiv"
   };
@@ -270,7 +308,7 @@ async function syncOneLesson(
     .in("user_id", participantIds);
   if (error) throw error;
   for (const connection of connections || []) {
-    await syncLessonForConnection(admin, connection, context.lesson, context.subjectName, context.timezone);
+    await syncLessonForConnection(admin, connection, context.lesson, context.subjectName, context.timezone, context.studentNames);
   }
 }
 
@@ -351,6 +389,12 @@ async function syncUserLessons(
     : { data: [], error: null };
   if (subjectError) throw subjectError;
   const subjectNames = new Map((subjects || []).map((subject) => [text(subject.id), text(subject.name)]));
+  const studentIds = [...new Set((lessonStudents || []).map((row) => text(row.student_id)).filter(Boolean))];
+  const { data: profiles, error: profilesError } = studentIds.length
+    ? await admin.from("profiles").select("id, full_name").in("id", studentIds)
+    : { data: [], error: null };
+  if (profilesError) throw profilesError;
+  const namesByStudentId = new Map((profiles || []).map((profile) => [text(profile.id), text(profile.full_name)]));
   const { data: school, error: schoolError } = await admin.from("schools").select("timezone").eq("id", schoolId).maybeSingle();
   if (schoolError) throw schoolError;
   const timezone = text(school?.timezone) || "Europe/Kyiv";
@@ -359,7 +403,8 @@ async function syncUserLessons(
   for (const lesson of lessons || []) {
     const isParticipant = text(lesson.teacher_id) === userId || (participants.get(text(lesson.id)) || []).includes(userId);
     if (!isParticipant) continue;
-    await syncLessonForConnection(admin, connection, lesson, subjectNames.get(text(lesson.subject_id)) || "Заняття", timezone);
+    const lessonStudentNames = (participants.get(text(lesson.id)) || []).map((studentId) => namesByStudentId.get(studentId) || "").filter(Boolean);
+    await syncLessonForConnection(admin, connection, lesson, subjectNames.get(text(lesson.subject_id)) || "Заняття", timezone, lessonStudentNames);
     synced += 1;
   }
   return synced;
@@ -398,7 +443,7 @@ async function handleCallback(request: Request, admin: ReturnType<typeof createC
     if (schoolError || !school) throw new Error("School not found");
     const calendarResult = await googleJson("https://www.googleapis.com/calendar/v3/calendars", accessToken, {
       method: "POST",
-      body: JSON.stringify({ summary: "Stella Academy", timeZone: text(school.timezone) || "Europe/Kyiv" })
+      body: JSON.stringify({ summary: SCHOOL_CALENDAR_NAME, timeZone: text(school.timezone) || "Europe/Kyiv" })
     });
     const calendarId = text(calendarResult.data.id);
     if (!calendarId) throw new Error("Google Calendar was not created");
@@ -407,7 +452,7 @@ async function handleCallback(request: Request, admin: ReturnType<typeof createC
       school_id: pending.school_id,
       user_id: pending.user_id,
       calendar_id: calendarId,
-      calendar_summary: text(calendarResult.data.summary) || "Stella Academy",
+      calendar_summary: text(calendarResult.data.summary) || SCHOOL_CALENDAR_NAME,
       refresh_token_ciphertext: encrypted.ciphertext,
       refresh_token_iv: encrypted.iv,
       connected_at: new Date().toISOString(),
