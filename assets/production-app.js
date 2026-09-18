@@ -1415,7 +1415,7 @@
   async function googleCalendarStatus() {
     try {
       const data = await callGoogleCalendar({ action: "status" });
-      return { available: true, connected: data.connected === true, calendarName: String(data.calendarName || "School Portal") };
+      return { available: true, connected: data.connected === true, calendarName: String(data.calendarName || "Stella Academy") };
     } catch (_) {
       return { available: false, connected: false, calendarName: "" };
     }
@@ -1424,8 +1424,8 @@
   function renderGoogleCalendarConnection() {
     const calendar = state.googleCalendar;
     if (!calendar.available) return `<div class="calendar-sync-card"><div><strong>Google Calendar</strong><div class="meta">Синхронізацію буде доступно після підключення серверної функції.</div></div></div>`;
-    if (calendar.connected) return `<div class="calendar-sync-card"><div><strong>Google Calendar підключено</strong><div class="meta">Заняття синхронізуються в окремий календар «${escape(calendar.calendarName || "School Portal")}».</div></div><div class="item-actions"><button class="btn small secondary" type="button" data-action="sync-google-calendar">Синхронізувати</button><button class="btn small secondary" type="button" data-action="disconnect-google-calendar">Вимкнути</button></div></div>`;
-    return `<div class="calendar-sync-card"><div><strong>Додати до Google Calendar</strong><div class="meta">За бажанням створимо окремий календар School Portal лише для твоїх занять.</div></div><button class="btn small secondary" type="button" data-action="connect-google-calendar">Підключити Google</button></div>`;
+    if (calendar.connected) return `<div class="calendar-sync-card"><div><strong>Google Calendar підключено</strong><div class="meta">Заняття синхронізуються в окремий календар «${escape(calendar.calendarName || "Stella Academy")}».</div></div><div class="item-actions"><button class="btn small secondary" type="button" data-action="sync-google-calendar">Синхронізувати</button><button class="btn small secondary" type="button" data-action="disconnect-google-calendar">Вимкнути</button></div></div>`;
+    return `<div class="calendar-sync-card"><div><strong>Додати до Google Calendar</strong><div class="meta">За бажанням створимо окремий календар Stella Academy лише для твоїх занять.</div></div><button class="btn small secondary" type="button" data-action="connect-google-calendar">Підключити Google</button></div>`;
   }
 
   async function connectGoogleCalendar() {
@@ -1465,7 +1465,7 @@
     try {
       await callGoogleCalendar({ action: "remove", lessonId });
     } catch (_) {
-      // Removing the lesson in School Portal must remain possible if Google is unavailable.
+      // Removing the lesson in Stella Academy must remain possible if Google is unavailable.
     }
   }
 

@@ -313,7 +313,7 @@ create table if not exists public.google_calendar_connections (
   school_id uuid not null references public.schools(id) on delete cascade,
   user_id uuid not null references auth.users(id) on delete cascade,
   calendar_id text not null,
-  calendar_summary text not null default 'School Portal',
+  calendar_summary text not null default 'Stella Academy',
   refresh_token_ciphertext text not null,
   refresh_token_iv text not null,
   connected_at timestamptz not null default now(),

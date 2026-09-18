@@ -71,7 +71,7 @@ function callbackUri(supabaseUrl: string) {
 }
 
 function htmlPage(title: string, message: string, retry = false) {
-  const action = retry ? '<p><a href="https://teacher-web-site.vercel.app/">Повернутися до School Portal</a></p>' : "";
+  const action = retry ? '<p><a href="https://teacher-web-site.vercel.app/">Повернутися до Stella Academy</a></p>' : "";
   return `<!doctype html><html lang="uk"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><body style="font-family:Arial,sans-serif;background:#f2f5f7;color:#1b2430;padding:48px"><main style="max-width:560px;margin:auto;background:#fff;border-radius:16px;padding:32px"><h1>${title}</h1><p>${message}</p>${action}</main></body></html>`;
 }
 
@@ -377,7 +377,7 @@ async function handleCallback(request: Request, admin: ReturnType<typeof createC
     .eq("state", state)
     .gt("expires_at", new Date().toISOString())
     .maybeSingle();
-  if (error || !pending) return new Response(htmlPage("Посилання вже неактивне", "Повернись у School Portal і запусти підключення ще раз.", true), { status: 400, headers: { "Content-Type": "text/html; charset=utf-8" } });
+  if (error || !pending) return new Response(htmlPage("Посилання вже неактивне", "Повернись у Stella Academy і запусти підключення ще раз.", true), { status: 400, headers: { "Content-Type": "text/html; charset=utf-8" } });
   await admin.from("google_calendar_oauth_states").delete().eq("state", state);
 
   try {
@@ -398,7 +398,7 @@ async function handleCallback(request: Request, admin: ReturnType<typeof createC
     if (schoolError || !school) throw new Error("School not found");
     const calendarResult = await googleJson("https://www.googleapis.com/calendar/v3/calendars", accessToken, {
       method: "POST",
-      body: JSON.stringify({ summary: "School Portal", timeZone: text(school.timezone) || "Europe/Kyiv" })
+      body: JSON.stringify({ summary: "Stella Academy", timeZone: text(school.timezone) || "Europe/Kyiv" })
     });
     const calendarId = text(calendarResult.data.id);
     if (!calendarId) throw new Error("Google Calendar was not created");
@@ -407,7 +407,7 @@ async function handleCallback(request: Request, admin: ReturnType<typeof createC
       school_id: pending.school_id,
       user_id: pending.user_id,
       calendar_id: calendarId,
-      calendar_summary: text(calendarResult.data.summary) || "School Portal",
+      calendar_summary: text(calendarResult.data.summary) || "Stella Academy",
       refresh_token_ciphertext: encrypted.ciphertext,
       refresh_token_iv: encrypted.iv,
       connected_at: new Date().toISOString(),
